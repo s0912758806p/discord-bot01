@@ -1,0 +1,10 @@
+discord.py
+flask
+schedule
+asyncio
+requests
+twstock
+lxml
+bs4
+opencc
+python-dotenv
