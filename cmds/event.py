@@ -84,7 +84,20 @@ class Event(Cog_Extension):
         self.training_mode = False
         
         # 將配置數據提前處理為更高效的數據結構
-        self.chatroom_id = int(jData.get('CHATROOM01', '0'))
+        try:
+            chatroom_value = jData.get('CHATROOM01', '0')
+            # 處理可能的註釋
+            if isinstance(chatroom_value, str):
+                if '#' in chatroom_value:
+                    chatroom_value = chatroom_value.split('#')[0].strip()
+                # 確保有值，否則使用默認值
+                if not chatroom_value or chatroom_value == '':
+                    chatroom_value = '0'
+            self.chatroom_id = int(chatroom_value)
+            logger.info(f"已設置聊天室ID: {self.chatroom_id}")
+        except (ValueError, TypeError) as e:
+            logger.error(f"無法解析聊天室ID: {e}")
+            self.chatroom_id = 0  # 使用默認值
         self.match_set = set(jData.get('MATCHLIST', []))
         self.tiansongbingList = jData.get('tiansongbingList', [
             '蜂蜜鬆餅', '抹茶鬆餅', '藍莓鬆餅', '鮮奶油鬆餅', '花生鬆餅', '巧克力鬆餅', '榛果巧克力鬆餅',
@@ -182,31 +195,40 @@ class Event(Cog_Extension):
         if msg.content.strip() == "!!啟動":
             self.training_mode = True
             await msg.channel.send("好的，已經啟動了。")
+            logger.info("訓練模式已啟動")
             return
 
         if msg.content.strip() == "!!關閉":
             self.training_mode = False
             await msg.channel.send("好的，已經關閉了。")
+            logger.info("訓練模式已關閉")
             return
 
         # 檢查映射表中的命令
         handler = self.command_handlers.get(msg.content)
         if handler:
+            logger.info(f"執行映射命令處理器: {handler.__name__}")
             await handler(msg)
             return
             
         # 處理特殊前綴命令
         if msg.content.startswith('!今日運勢-'):
+            logger.info("處理今日運勢命令")
             await self.horoscope(msg)
             return
             
         # 處理淺草籤命令
         if msg.content == '??:' or msg.content.startswith('??:'):
+            logger.info(f"處理抽籤命令: {msg.content}")
             await self.process_qian_command(msg)
             return
             
         # 嘗試並行處理其他回應
+        logger.debug(f"檢查默認回應處理: {msg.content}")
         await self.process_default_responses(msg)
+        
+        # 確保標準命令處理也正常進行
+        await self.bot.process_commands(msg)
         
     async def sweet_waffle(self, msg: discord.Message) -> None:
         """處理甜味鬆餅命令"""
@@ -249,19 +271,43 @@ class Event(Cog_Extension):
     async def process_qian_command(self, msg: discord.Message) -> None:
         """處理淺草籤相關命令"""
         try:
+            logger.info(f"處理抽籤命令內容: {msg.content}")
             if msg.content == '??:':
-                await msg.channel.send(random.choice(self.GREETINGS))
+                greeting = random.choice(self.GREETINGS)
+                logger.info(f"發送問候: {greeting}")
+                await msg.channel.send(greeting)
             else:
+                # 獲取問題內容
+                question = msg.content[3:].strip()
+                logger.info(f"抽籤問題: {question}")
+                
                 rangeNum = random.randint(1, 10)
+                logger.info(f"抽籤隨機數: {rangeNum}")
                 
                 if rangeNum < 9:
                     response = random.choice(self.RANDOM_RESPONSES)
+                    logger.info(f"發送抽籤回應: {response}")
                     await msg.channel.send(response)
-                    await msg.channel.send(file=discord.File(self.PUQIAN[rangeNum - 1]))
+                    
+                    # 確保文件路徑存在
+                    img_path = self.PUQIAN[rangeNum - 1]
+                    logger.info(f"發送抽籤圖片: {img_path}")
+                    
+                    try:
+                        await msg.channel.send(file=discord.File(img_path))
+                    except Exception as e:
+                        logger.error(f"發送抽籤圖片失敗: {e}, 路徑: {img_path}")
+                        await msg.channel.send(f"抱歉，無法載入圖片。錯誤: {e}")
                 else:
-                    await msg.channel.send(random.choice(self.BEILAN))
+                    response = random.choice(self.BEILAN)
+                    logger.info(f"發送貝蘭回應: {response}")
+                    await msg.channel.send(response)
         except Exception as e:
-            logger.error(f"處理抽籤命令時出錯: {e}")
+            logger.error(f"處理抽籤命令時出錯: {e}", exc_info=True)
+            try:
+                await msg.channel.send(f"抱歉，處理命令時出錯: {e}")
+            except:
+                pass
                 
     @measure_time
     @cache(ttl=1800)  # 30分鐘緩存

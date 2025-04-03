@@ -44,8 +44,10 @@ def save_config(file_path: str, config: Dict[str, Any]) -> None:
         file_path: 配置文件路徑
         config: 配置數據
     """
-    # 確保目錄存在
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    # 確保目錄存在，只有當file_path包含目錄路徑時才創建
+    dirname = os.path.dirname(file_path)
+    if dirname:  # 只有當dirname非空時才創建目錄
+        os.makedirs(dirname, exist_ok=True)
     
     # 寫入JSON文件
     with open(file_path, 'w', encoding='utf-8') as f:

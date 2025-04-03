@@ -29,11 +29,43 @@ class Earthquake(Cog_Extension):
         self.session = None
         self.config = load_config('setting.json')
         
-        # 優先使用環境變數中的頻道ID，再使用配置文件中的ID
-        self.channel_id = int(os.environ.get('EARTHQUAKE_CHANNEL') or self.config.get('CHATROOM01', '0'))
+        # 初始化已發送的地震ID集合
+        self.sent_earthquake_ids = set()
         
+        # 優先使用環境變數中的頻道ID，再使用配置文件中的ID
+        try:
+            channel_value = os.environ.get('EARTHQUAKE_CHANNEL')
+            if channel_value:
+                # 處理可能的註釋
+                if '#' in channel_value:
+                    channel_value = channel_value.split('#')[0].strip()
+                self.channel_id = int(channel_value)
+            else:
+                # 使用配置文件中的ID
+                chatroom_value = self.config.get('CHATROOM01', '0')
+                if isinstance(chatroom_value, str):
+                    if '#' in chatroom_value:
+                        chatroom_value = chatroom_value.split('#')[0].strip()
+                    if not chatroom_value or chatroom_value == '':
+                        chatroom_value = '0'
+                self.channel_id = int(chatroom_value)
+                
+            logger.info(f"已設置地震通知頻道ID: {self.channel_id}")
+        except (ValueError, TypeError) as e:
+            logger.error(f"無法解析地震通知頻道ID: {e}，使用預設值 0")
+            self.channel_id = 0  # 使用預設值
+            
         # 設置地震時間窗口 (小時)
-        self.max_earthquake_age_hours = int(os.environ.get('EARTHQUAKE_MAX_AGE_HOURS', self.max_earthquake_age_hours))
+        try:
+            age_value = os.environ.get('EARTHQUAKE_MAX_AGE_HOURS', str(self.max_earthquake_age_hours))
+            # 處理可能的註釋
+            if '#' in age_value:
+                age_value = age_value.split('#')[0].strip()
+            self.max_earthquake_age_hours = int(age_value)
+            logger.info(f"已設置最大地震年齡 (小時): {self.max_earthquake_age_hours}")
+        except (ValueError, TypeError) as e:
+            logger.error(f"無法解析最大地震年齡: {e}，使用預設值 {self.max_earthquake_age_hours}")
+            # 保持預設值不變
         
         # 初始化數據結構
         self.last_earthquakes: Set[str] = set()
@@ -45,19 +77,37 @@ class Earthquake(Cog_Extension):
         self._last_api_call_time = None
         self._cached_earthquake_data = None
         self._cached_earthquake_timestamp = None
-        self.consecutive_api_errors = 0
+        self.consecutive_errors = 0
         self.last_api_error_time = None
         
         # 台灣中央氣象局地震 API
-        self.cwb_api_url = os.environ.get('EARTHQUAKE_API_URL') or "https://opendata.cwb.gov.tw/api/v1/rest/datastore/E-A0016-001"
+        api_url = os.environ.get('EARTHQUAKE_API_URL')
+        if api_url:
+            if '#' in api_url:
+                api_url = api_url.split('#')[0].strip()
+            # 修復可能包含多餘空格的URL
+            api_url = api_url.strip()
+            self.cwb_api_url = api_url
+        else:
+            # 使用默認的 API URL
+            self.cwb_api_url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0016-001"
+        
         # 優先使用環境變數中的API密鑰，環境變數不存在時則使用配置文件中的密鑰
-        self.cwb_api_key = os.environ.get('EARTHQUAKE_API_KEY') or self.config.get('CWB_API_KEY', '')
+        api_key = os.environ.get('EARTHQUAKE_API_KEY')
+        if api_key:
+            if '#' in api_key:
+                api_key = api_key.split('#')[0].strip()
+            self.cwb_api_key = api_key.strip()
+        else:
+            self.cwb_api_key = self.config.get('CWB_API_KEY', '').strip()
         
         # USGS 地震 API (作為備用)
         self.usgs_api_url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
         
         # 從配置文件加載數據
         self._load_earthquake_data()
+        # 載入已發送的地震ID
+        self._load_sent_earthquake_ids()
         
         # 設置監測任務
         self.earthquake_monitoring.start()
@@ -137,7 +187,7 @@ class Earthquake(Cog_Extension):
             current_time = datetime.datetime.now()
             last_call_time = getattr(self, 'last_api_call_time', None)
             last_error_time = getattr(self, 'last_api_error_time', None)
-            consecutive_errors = getattr(self, 'consecutive_api_errors', 0)
+            consecutive_errors = getattr(self, 'consecutive_errors', 0)
             
             # 計算基於錯誤次數的等待時間 (指數回退)
             min_wait_seconds = 30  # 最短等待時間
@@ -171,7 +221,7 @@ class Earthquake(Cog_Extension):
                 earthquakes = cached_data
             else:
                 # 不使用快取，重新獲取資料
-                earthquakes = await self.fetch_taiwan_earthquakes()
+                earthquakes = await self.fetch_earthquake_data()
                 
                 if not earthquakes:
                     # 如果中央氣象局 API 無法獲取數據，嘗試使用 USGS API
@@ -184,20 +234,20 @@ class Earthquake(Cog_Extension):
             
             if earthquakes:
                 # 重設連續錯誤計數
-                self.consecutive_api_errors = 0
+                self.consecutive_errors = 0
                 # 處理地震數據
                 await self.process_earthquakes(earthquakes)
             else:
                 # 更新錯誤計數和時間
-                self.consecutive_api_errors = consecutive_errors + 1
+                self.consecutive_errors = consecutive_errors + 1
                 self.last_api_error_time = current_time
-                logger.warning(f"無法獲取地震數據 (連續錯誤次數: {self.consecutive_api_errors})")
+                logger.warning(f"無法獲取地震數據 (連續錯誤次數: {self.consecutive_errors})")
                 
         except aiohttp.ClientError as e:
             # 網絡錯誤處理
-            self.consecutive_api_errors = getattr(self, 'consecutive_api_errors', 0) + 1
+            self.consecutive_errors = getattr(self, 'consecutive_errors', 0) + 1
             self.last_api_error_time = current_time
-            logger.error(f"API請求網絡錯誤: {e} (連續錯誤次數: {self.consecutive_api_errors})")
+            logger.error(f"API請求網絡錯誤: {e} (連續錯誤次數: {self.consecutive_errors})")
         except Exception as e:
             # 其他錯誤處理
             logger.error(f"地震監測過程中發生錯誤: {e}", exc_info=True)
@@ -208,84 +258,54 @@ class Earthquake(Cog_Extension):
         await self.bot.wait_until_ready()
         logger.info("地震監測開始運行，頻率: 每2分鐘")
         
-    @measure_time
-    async def fetch_taiwan_earthquakes(self) -> List[Dict[str, Any]]:
-        """從台灣中央氣象局獲取地震資訊"""
-        if not self.cwb_api_key:
-            logger.warning("未設置中央氣象局 API 密鑰")
-            return []
-            
+    async def fetch_earthquake_data(self):
+        """從中央氣象署取得地震資訊"""
+        logger.info(f"正在從 {self.cwb_api_url} 取得地震資訊 使用API金鑰: {self.cwb_api_key[:5]}...")
         try:
-            # 計算過去12小時的時間，只獲取最近的地震
-            time_from = (datetime.datetime.now() - datetime.timedelta(hours=12)).strftime('%Y-%m-%dT%H:%M:%S')
-            
-            params = {
-                'Authorization': self.cwb_api_key,
-                'limit': 10,  # 獲取最近的10筆資料
-                'format': 'JSON',
-                'timeFrom': time_from,
-                'sort': 'time'  # 依照時間排序
+            url = self.cwb_api_url
+            headers = {
+                "Authorization": self.cwb_api_key,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             }
             
-            # 使用超時設置和重試機制
-            timeout = aiohttp.ClientTimeout(total=10)  # 10秒總超時
-            retry_count = 0
-            max_retries = 2
-            
-            while retry_count <= max_retries:
+            async with self.session.get(url, headers=headers) as response:
+                if response.status != 200:
+                    logger.error(f"無法取得地震資料: 狀態碼 {response.status}")
+                    error_text = await response.text()
+                    logger.error(f"錯誤回應內容: {error_text[:500]}")
+                    return None
+                
                 try:
-                    async with self.session.get(self.cwb_api_url, params=params, timeout=timeout) as response:
-                        if response.status != 200:
-                            logger.warning(f"從中央氣象局獲取地震數據失敗，狀態碼: {response.status}")
-                            if 500 <= response.status < 600 and retry_count < max_retries:
-                                # 服務器錯誤可重試
-                                retry_count += 1
-                                await asyncio.sleep(1 * (2 ** retry_count))  # 指數退避
-                                continue
-                            return []
-                            
-                        try:
-                            data = await response.json()
-                        except json.JSONDecodeError:
-                            logger.error("解析中央氣象局JSON響應失敗")
-                            return []
-                        
-                        if 'records' not in data or 'earthquake' not in data['records']:
-                            return []
-                        
-                        # 獲取所有地震並按發生時間排序
-                        earthquakes = data['records']['earthquake']
-                        
-                        # 排序地震，最新的在前面
-                        earthquakes.sort(
-                            key=lambda eq: datetime.datetime.strptime(
-                                eq.get('originTime', '1970-01-01 00:00:00'), 
-                                '%Y-%m-%d %H:%M:%S'
-                            ),
-                            reverse=True
-                        )
-                        
-                        # 將最舊的地震時間記錄下來
-                        if earthquakes:
-                            self.last_check_time = datetime.datetime.now()
-                            
-                        # 只返回最近的地震
-                        return earthquakes
+                    data = await response.json()
+                    
+                    if not data.get("success"):
+                        logger.error(f"API 回應錯誤: {data}")
+                        return None
+                    
+                    if "records" not in data:
+                        logger.error(f"API 回應中沒有 records: {data}")
+                        return None
+                    
+                    if "Earthquake" not in data["records"]:
+                        logger.error(f"API 回應中沒有 Earthquake: {data['records']}")
+                        return None
+                    
+                    earthquakes = data["records"]["Earthquake"]
+                    logger.info(f"成功取得 {len(earthquakes)} 筆地震資料")
+                    return earthquakes
+                except ValueError as e:
+                    logger.error(f"無法解析 JSON 回應: {e}")
+                    return None
                 
-                except asyncio.TimeoutError:
-                    logger.warning(f"從中央氣象局獲取數據超時 (嘗試 {retry_count+1}/{max_retries+1})")
-                    retry_count += 1
-                    if retry_count <= max_retries:
-                        await asyncio.sleep(1 * (2 ** retry_count))  # 指數退避
-                    else:
-                        return []
-                except aiohttp.ClientError as e:
-                    logger.error(f"中央氣象局API請求錯誤: {e}")
-                    return []
-                
+        except aiohttp.ClientError as e:
+            logger.error(f"連線到地震 API 時發生錯誤: {e}")
+            return None
+        except asyncio.TimeoutError:
+            logger.error("連線到地震 API 超時")
+            return None
         except Exception as e:
-            logger.error(f"獲取台灣地震數據時出錯: {e}", exc_info=True)
-            return []
+            logger.error(f"取得地震資料時發生未知錯誤: {e}")
+            return None
             
     @measure_time
     async def fetch_usgs_earthquakes(self) -> List[Dict[str, Any]]:
@@ -830,8 +850,8 @@ class Earthquake(Cog_Extension):
             if hasattr(self, '_api_call_count'):
                 embed.add_field(name="API成功率", value=api_success_rate, inline=True)
                 
-            if hasattr(self, 'consecutive_api_errors') and self.consecutive_api_errors > 0:
-                embed.add_field(name="連續API錯誤", value=str(self.consecutive_api_errors), inline=True)
+            if hasattr(self, 'consecutive_errors') and self.consecutive_errors > 0:
+                embed.add_field(name="連續API錯誤", value=str(self.consecutive_errors), inline=True)
                 
             embed.set_footer(text=f"上次檢查: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             
@@ -946,11 +966,60 @@ class Earthquake(Cog_Extension):
             # 重新載入環境變數
             load_dotenv(override=True)
             
-            # 更新設置
-            self.channel_id = int(os.environ.get('EARTHQUAKE_CHANNEL') or self.config.get('CHATROOM01', '0'))
-            self.cwb_api_url = os.environ.get('EARTHQUAKE_API_URL') or "https://opendata.cwb.gov.tw/api/v1/rest/datastore/E-A0016-001"
-            self.cwb_api_key = os.environ.get('EARTHQUAKE_API_KEY') or self.config.get('CWB_API_KEY', '')
-            self.max_earthquake_age_hours = int(os.environ.get('EARTHQUAKE_MAX_AGE_HOURS', self.max_earthquake_age_hours))
+            # 更新設置 - 處理頻道ID
+            try:
+                channel_value = os.environ.get('EARTHQUAKE_CHANNEL')
+                if channel_value:
+                    # 處理可能的註釋
+                    if '#' in channel_value:
+                        channel_value = channel_value.split('#')[0].strip()
+                    self.channel_id = int(channel_value)
+                else:
+                    # 使用配置文件中的ID
+                    chatroom_value = self.config.get('CHATROOM01', '0')
+                    if isinstance(chatroom_value, str):
+                        if '#' in chatroom_value:
+                            chatroom_value = chatroom_value.split('#')[0].strip()
+                        if not chatroom_value or chatroom_value == '':
+                            chatroom_value = '0'
+                    self.channel_id = int(chatroom_value)
+                logger.info(f"已重新加載地震通知頻道ID: {self.channel_id}")
+            except (ValueError, TypeError) as e:
+                logger.error(f"重新加載時無法解析地震通知頻道ID: {e}，保持原值")
+                # 頻道ID保持不變
+                
+            # 更新API URL，處理註釋
+            new_api_url = os.environ.get('EARTHQUAKE_API_URL')
+            if new_api_url:
+                if '#' in new_api_url:
+                    new_api_url = new_api_url.split('#')[0].strip()
+                # 修復可能包含多餘空格的URL
+                new_api_url = new_api_url.strip()
+                self.cwb_api_url = new_api_url
+            else:
+                self.cwb_api_url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0016-001"
+                
+            # 更新API密鑰，處理註釋
+            new_api_key = os.environ.get('EARTHQUAKE_API_KEY')
+            if new_api_key:
+                if '#' in new_api_key:
+                    new_api_key = new_api_key.split('#')[0].strip()
+                # 確保API密鑰不包含空格
+                new_api_key = new_api_key.strip()
+                self.cwb_api_key = new_api_key
+            else:
+                self.cwb_api_key = self.config.get('CWB_API_KEY', '').strip()
+                
+            # 更新最大地震年齡，處理註釋
+            try:
+                age_value = os.environ.get('EARTHQUAKE_MAX_AGE_HOURS', str(self.max_earthquake_age_hours))
+                # 處理可能的註釋
+                if '#' in age_value:
+                    age_value = age_value.split('#')[0].strip()
+                self.max_earthquake_age_hours = int(age_value)
+                logger.info(f"已重新加載最大地震年齡 (小時): {self.max_earthquake_age_hours}")
+            except (ValueError, TypeError) as e:
+                logger.error(f"重新加載時無法解析最大地震年齡: {e}，保持原值")
             
             # 準備回應訊息
             embed = discord.Embed(
@@ -1028,9 +1097,9 @@ class Earthquake(Cog_Extension):
                 )
                 
             # 重置API錯誤計數
-            if hasattr(self, 'consecutive_api_errors') and self.consecutive_api_errors > 0:
-                old_count = self.consecutive_api_errors
-                self.consecutive_api_errors = 0
+            if hasattr(self, 'consecutive_errors') and self.consecutive_errors > 0:
+                old_count = self.consecutive_errors
+                self.consecutive_errors = 0
                 embed.add_field(
                     name="API錯誤計數已重置",
                     value=f"從 {old_count} 重置為 0",
@@ -1043,12 +1112,215 @@ class Earthquake(Cog_Extension):
             logger.info(f"管理員 {ctx.author.name} 已從環境變數重新載入地震監測設定")
             
             # 清除連續API錯誤
-            self.consecutive_api_errors = 0
+            self.consecutive_errors = 0
             self.last_api_error_time = None
             
         except Exception as e:
             await ctx.send(f"❌ 重新載入環境變數時出錯: {str(e)}")
             logger.error(f"重新載入環境變數時出錯: {e}", exc_info=True)
+
+    @measure_time
+    async def check_earthquakes(self):
+        """定時檢查是否有新地震"""
+        try:
+            earthquakes = await self.fetch_earthquake_data()
+            if not earthquakes:
+                logger.warning(f"無法取得地震資料，此為第 {self.consecutive_errors} 次連續錯誤")
+                self.consecutive_errors += 1
+                if self.consecutive_errors > 5:
+                    logger.error("連續錯誤超過 5 次，暫時暫停地震監測")
+                    # 暫時延長下次檢查時間，避免頻繁請求
+                    await asyncio.sleep(600)  # 10 分鐘後再試
+                return
+            
+            self.consecutive_errors = 0  # 重置錯誤計數
+            
+            current_time = datetime.datetime.now()
+            max_age_hours = self.max_earthquake_age_hours
+            
+            # 查找未發送的地震通知
+            new_earthquakes = []
+            for earthquake in earthquakes:
+                eq_id = self._generate_earthquake_id(earthquake)
+                
+                # 跳過已發送的地震
+                if eq_id in self.sent_earthquake_ids:
+                    continue
+                
+                # 檢查地震時間是否在允許範圍內
+                eq_time = self._parse_earthquake_time(earthquake)
+                if eq_time:
+                    time_diff = current_time - eq_time
+                    hours_diff = time_diff.total_seconds() / 3600
+                    
+                    if hours_diff <= max_age_hours:
+                        new_earthquakes.append(earthquake)
+                        self.sent_earthquake_ids.add(eq_id)
+            
+            # 發送新地震通知
+            if new_earthquakes:
+                logger.info(f"發現 {len(new_earthquakes)} 筆新地震")
+                for earthquake in new_earthquakes:
+                    await self.send_earthquake_notification(earthquake)
+                
+                # 保存已發送地震ID到配置文件
+                self._save_sent_earthquake_ids()
+            
+        except Exception as e:
+            logger.error(f"檢查地震時發生錯誤: {e}")
+
+    def _generate_earthquake_id(self, earthquake):
+        """生成地震唯一ID"""
+        try:
+            # 優先使用EarthquakeNo和OriginTime組合作為ID
+            if "EarthquakeNo" in earthquake:
+                eq_no = earthquake["EarthquakeNo"]
+                if "EarthquakeInfo" in earthquake and "OriginTime" in earthquake["EarthquakeInfo"]:
+                    origin_time = earthquake["EarthquakeInfo"]["OriginTime"]
+                    return f"{eq_no}_{origin_time}"
+                return str(eq_no)
+            
+            # 備用方案：使用震央位置和發生時間
+            if "EarthquakeInfo" in earthquake:
+                info = earthquake["EarthquakeInfo"]
+                parts = []
+                
+                if "OriginTime" in info:
+                    parts.append(info["OriginTime"])
+                
+                if "Epicenter" in info and "Location" in info["Epicenter"]:
+                    # 取位置中的座標部分
+                    location = info["Epicenter"]["Location"]
+                    parts.append(location)
+                
+                if parts:
+                    return "_".join(parts)
+            
+            # 最後方案：直接使用字符串表示
+            return str(hash(str(earthquake)))
+        except Exception as e:
+            logger.error(f"生成地震ID時出錯: {e}")
+            return str(hash(str(earthquake)))
+
+    def _parse_earthquake_time(self, earthquake):
+        """解析地震發生時間"""
+        try:
+            if "EarthquakeInfo" in earthquake and "OriginTime" in earthquake["EarthquakeInfo"]:
+                time_str = earthquake["EarthquakeInfo"]["OriginTime"]
+                # 格式為 "2025-04-01 19:26:02"
+                return datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+            return None
+        except Exception as e:
+            logger.error(f"解析地震時間時出錯: {e}")
+            return None
+
+    def _load_sent_earthquake_ids(self):
+        """從配置文件加載已發送的地震ID"""
+        try:
+            config_dir = "config"
+            config_file = os.path.join(config_dir, "earthquake_sent_ids.json")
+            
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.sent_earthquake_ids = set(data)
+                        logger.info(f"已載入 {len(self.sent_earthquake_ids)} 筆地震ID記錄")
+        except Exception as e:
+            logger.error(f"載入地震ID記錄時出錯: {e}")
+            self.sent_earthquake_ids = set()
+
+    def _save_sent_earthquake_ids(self):
+        """保存已發送的地震ID到配置文件"""
+        try:
+            config_dir = "config"
+            # 確保目錄存在
+            os.makedirs(config_dir, exist_ok=True)
+            
+            config_file = os.path.join(config_dir, "earthquake_sent_ids.json")
+            
+            # 限制保存的ID數量，只保留最近的200個
+            ids_to_save = list(self.sent_earthquake_ids)
+            if len(ids_to_save) > 200:
+                ids_to_save = ids_to_save[-200:]
+            
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(ids_to_save, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存地震ID記錄時出錯: {e}")
+
+    @measure_time
+    async def send_earthquake_notification(self, earthquake):
+        """發送地震通知到指定頻道"""
+        try:
+            if not self.channel_id:
+                logger.warning("未設置地震通知頻道，無法發送通知")
+                return
+            
+            channel = self.bot.get_channel(self.channel_id)
+            if not channel:
+                logger.warning(f"找不到頻道 ID: {self.channel_id}，無法發送地震通知")
+                return
+            
+            embed = discord.Embed(
+                title="🔴 地震通報",
+                description=earthquake.get("ReportContent", "無內容"),
+                color=0xFF0000,
+                timestamp=datetime.datetime.now()
+            )
+            
+            # 添加地震資訊
+            if "EarthquakeInfo" in earthquake:
+                info = earthquake["EarthquakeInfo"]
+                
+                # 添加發生時間
+                if "OriginTime" in info:
+                    embed.add_field(name="發生時間", value=info["OriginTime"], inline=True)
+                
+                # 添加震源深度
+                if "FocalDepth" in info:
+                    embed.add_field(name="震源深度", value=f"{info['FocalDepth']} 公里", inline=True)
+                
+                # 添加規模資訊
+                if "EarthquakeMagnitude" in info:
+                    mag = info["EarthquakeMagnitude"]
+                    if "MagnitudeValue" in mag:
+                        embed.add_field(name="規模", value=mag["MagnitudeValue"], inline=True)
+                
+                # 添加震央位置
+                if "Epicenter" in info and "Location" in info["Epicenter"]:
+                    embed.add_field(name="位置", value=info["Epicenter"]["Location"], inline=False)
+            
+            # 添加最大震度資訊
+            if "Intensity" in earthquake and "ShakingArea" in earthquake["Intensity"]:
+                areas = earthquake["Intensity"]["ShakingArea"]
+                max_intensity_areas = [area for area in areas if area.get("AreaDesc", "").startswith("最大震度")]
+                
+                if max_intensity_areas:
+                    for area in max_intensity_areas:
+                        embed.add_field(
+                            name=area.get("AreaDesc", "震度資訊"), 
+                            value=area.get("CountyName", "未知地區"), 
+                            inline=False
+                        )
+            
+            # 添加報告連結
+            if "Web" in earthquake:
+                embed.add_field(name="詳細資訊", value=earthquake["Web"], inline=False)
+            
+            # 添加地震圖片
+            if "ReportImageURI" in earthquake:
+                embed.set_image(url=earthquake["ReportImageURI"])
+            
+            # 添加頁腳
+            embed.set_footer(text="資料來源: 中央氣象署")
+            
+            # 發送通知
+            await channel.send(embed=embed)
+            logger.info(f"已發送地震通知: {earthquake.get('ReportContent', '無內容')[:30]}...")
+            
+        except Exception as e:
+            logger.error(f"發送地震通知時出錯: {e}")
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Earthquake(bot)) 

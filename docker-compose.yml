@@ -3,12 +3,19 @@ version: '3'
 services:
   discord-bot:
     build: .
+    container_name: discord-bot
     restart: unless-stopped
     volumes:
       - ./logs:/app/logs
       - ./setting.json:/app/setting.json
       - ./assets:/app/assets
+      - ./.env:/app/.env
     env_file:
       - .env
     environment:
-      - TZ=Asia/Taipei 
+      - TZ=Asia/Taipei
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3" 
