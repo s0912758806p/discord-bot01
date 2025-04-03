@@ -1,4 +1,92 @@
-## discord bot side project
+# Discord Bot 多功能機器人
 
-1. created 2021y
-2. public demo code and testing python new version
+一個功能豐富的 Discord 機器人專案，提供地震監測、新聞聚合、台股資訊、反應圖片等多種實用功能。
+
+## 功能特性
+
+- **地震監測**：自動監測台灣地區地震，並發送通知到指定頻道
+- **新聞聚合**：獲取最新焦點新聞和財經新聞
+- **股票資訊**：查詢台股指數和個股資訊
+- **反應圖片**：發送有趣的圖片和表情符號
+- **自動重啟**：每日自動重啟以確保穩定運行
+- **環境變數管理**：使用 `.env` 文件保護敏感資訊
+
+## 技術架構
+
+- 使用 Python 和 Discord.py 庫開發
+- 模組化設計，易於擴展
+- 使用 Docker 容器化部署
+- 緩存機制提高性能
+- 完整的錯誤處理和日誌記錄
+
+## 安裝與設定
+
+### 前置需求
+
+- Python 3.8 或更高版本
+- pip 套件管理器
+- Discord 開發者帳號與 Bot Token
+
+### 安裝步驟
+
+1. 複製專案
+```bash
+git clone <repository-url>
+cd discord-bot01
+```
+
+2. 安裝依賴
+```bash
+pip install -r requirements.txt
+```
+
+3. 配置環境變數
+```bash
+cp .env.example .env
+```
+編輯 `.env` 文件，填寫以下必要資訊：
+- `TOKEN`：Discord 機器人 Token
+- `EARTHQUAKE_CHANNEL`：地震通知頻道 ID
+- `EARTHQUAKE_API_KEY`：中央氣象局 API 密鑰
+
+4. 啟動機器人
+```bash
+python main.py
+```
+
+### Docker 部署
+
+使用 Docker Compose 快速部署：
+```bash
+docker-compose up -d
+```
+
+## 指令列表
+
+### 地震監測
+- `/地震監測狀態`：檢查地震監測系統狀態
+- `/設置地震頻道 <頻道>`：設置地震警報發送的頻道 (管理員)
+- `/設置氣象局API密鑰 <密鑰>`：設置中央氣象局 API 密鑰 (管理員)
+- `/檢查氣象局密鑰`：檢查當前使用的 API 密鑰 (管理員)
+- `/重新載入環境變數`：從 .env 文件重新加載設定 (管理員)
+
+### 新聞
+- `/焦點新聞`：獲取最新焦點新聞
+- `/財經新聞`：獲取最新財經新聞
+
+### 股票
+- `/twii`：獲取台灣加權指數資訊
+- `/tws <股票代碼>`：獲取特定股票資訊
+
+## 貢獻與開發
+
+歡迎提交 Pull Request 或開 Issue 提出建議。
+
+## 授權協議
+
+此專案為個人使用，未指定開源授權。
+
+## 作者與鳴謝
+
+- 最初版本建立於 2021 年
+- 感謝所有開源貢獻者和社群

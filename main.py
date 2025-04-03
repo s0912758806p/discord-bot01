@@ -13,11 +13,22 @@ from core.logging import logger
 from core.cache import start_cleanup_task
 
 # 載入環境變數
+logger.info("正在載入環境變數...")
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
+if not TOKEN:
+    logger.critical("未設置 Discord Bot Token，請在 .env 文件中設置 TOKEN 變數")
+    raise ValueError("Discord Bot Token 未設置")
+else:
+    logger.info("已成功載入 Discord Bot Token")
+
+# 載入命令前綴
+COMMAND_PREFIX = os.getenv('COMMAND_PREFIX', '/')
+logger.info(f"使用命令前綴: {COMMAND_PREFIX}")
 
 # 載入配置
 jData = load_config('setting.json')
+logger.info("已載入配置文件")
 
 # 設置意圖
 intents = discord.Intents.default()
@@ -25,7 +36,7 @@ intents.message_content = True
 intents.members = True
 
 # 實例化機器人
-bot = commands.Bot(command_prefix='/', intents=intents)
+bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
 # 記錄未處理的異常
 @bot.event
@@ -46,9 +57,12 @@ async def on_ready():
 async def cache_cleanup_task():
     """定期運行緩存清理"""
     try:
+        # 讀取緩存清理間隔
+        cleanup_interval = int(os.getenv('CACHE_CLEANUP_INTERVAL', 3600))
+        
         # 啟動緩存清理任務
-        cleanup_task = start_cleanup_task()
-        logger.info("緩存清理任務已啟動")
+        cleanup_task = start_cleanup_task(interval=cleanup_interval)
+        logger.info(f"緩存清理任務已啟動 (間隔: {cleanup_interval}秒)")
         await cleanup_task
     except Exception as e:
         logger.error(f"緩存清理任務出錯: {e}")
@@ -80,9 +94,12 @@ def scheduled_restart():
 
 # 設置定時任務
 def setup_schedule():
-    # 每天凌晨3點重啟機器人
-    schedule.every().day.at("03:00").do(scheduled_restart)
-    logger.info("已設置定時重啟任務")
+    # 從環境變數讀取重啟時間
+    restart_time = os.getenv('RESTART_TIME', '03:00')
+    
+    # 每天指定時間重啟機器人
+    schedule.every().day.at(restart_time).do(scheduled_restart)
+    logger.info(f"已設置定時重啟任務，時間: {restart_time}")
 
 if __name__ == '__main__':
     try:

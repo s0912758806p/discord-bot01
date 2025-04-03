@@ -118,15 +118,26 @@ def clear_cache() -> None:
     _cache.clear()
     
 # 定期清理過期的緩存項
-async def cleanup_task() -> None:
-    """定期清理緩存的後台任務"""
+async def cleanup_task(interval: int = 60) -> None:
+    """定期清理緩存的後台任務
+    
+    Args:
+        interval: 清理間隔（以秒為單位），預設每分鐘清理一次
+    """
     while True:
         _cache.cleanup()
-        await asyncio.sleep(60)  # 每分鐘清理一次
+        await asyncio.sleep(interval)  # 可配置清理間隔
         
-def start_cleanup_task() -> asyncio.Task:
-    """啟動緩存清理任務"""
-    return asyncio.create_task(cleanup_task())
+def start_cleanup_task(interval: int = 60) -> asyncio.Task:
+    """啟動緩存清理任務
+    
+    Args:
+        interval: 清理間隔（以秒為單位），預設每分鐘清理一次
+        
+    Returns:
+        緩存清理的非同步任務
+    """
+    return asyncio.create_task(cleanup_task(interval))
 
 def get_cache_size():
     """
