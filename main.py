@@ -10,6 +10,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from core.config import load_config
 from core.logging import logger
+from core.cache import start_cleanup_task
 
 # 載入環境變數
 load_dotenv()
@@ -37,6 +38,20 @@ async def on_ready():
     logger.info(f"機器人已啟動: {bot.user.name} ({bot.user.id})")
     await load_cogs()
     logger.info("已加載所有Cogs")
+    
+    # 啟動緩存清理任務
+    asyncio.create_task(cache_cleanup_task())
+
+# 緩存清理任務
+async def cache_cleanup_task():
+    """定期運行緩存清理"""
+    try:
+        # 啟動緩存清理任務
+        cleanup_task = start_cleanup_task()
+        logger.info("緩存清理任務已啟動")
+        await cleanup_task
+    except Exception as e:
+        logger.error(f"緩存清理任務出錯: {e}")
 
 # 載入擴展模組
 async def load_cogs():

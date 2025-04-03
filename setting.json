@@ -236,5 +236,8 @@
       "assets/img/qian/58.png",
       "assets/img/qian/59.png",
       "assets/img/qian/60.png"
-  ]
+  ],
+  "CWB_API_KEY": "",
+  "EARTHQUAKE_CHANNEL": "",
+  "LAST_EARTHQUAKES": []
 }
