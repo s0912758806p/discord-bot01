@@ -1,0 +1,14 @@
+2025-04-03 16:02:59,765 - discord_bot - INFO - 已啟動保活服務
+2025-04-03 16:02:59,765 - discord_bot - INFO - 已設置定時重啟任務
+2025-04-03 16:03:03,316 - discord_bot - INFO - 機器人已啟動: 耿耿之超級初號機 (875614416417202176)
+2025-04-03 16:03:03,326 - discord_bot - INFO - 已加載模組: react.py
+2025-04-03 16:03:03,475 - discord_bot - INFO - Event 模組已加載
+2025-04-03 16:03:03,475 - discord_bot - INFO - 已加載模組: event.py
+2025-04-03 16:03:03,606 - discord_bot - INFO - 已加載模組: stock.py
+2025-04-03 16:03:03,607 - discord_bot - INFO - 已加載模組: music.py
+2025-04-03 16:03:03,608 - discord_bot - INFO - 已加載模組: main.py
+2025-04-03 16:03:03,609 - discord_bot - INFO - 已加載模組: news.py
+2025-04-03 16:03:03,609 - discord_bot - INFO - 已加載所有Cogs
+2025-04-03 16:04:04,663 - discord_bot - INFO - 接收到中斷信號，關閉機器人...
+2025-04-03 16:04:04,665 - discord_bot - INFO - Event 模組已卸載，關閉 session
+2025-04-03 16:04:04,937 - discord_bot - INFO - 開始運行定時任務循環
