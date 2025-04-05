@@ -95,6 +95,31 @@ async def on_ready():
         cache_cleanup_task = start_cleanup_task(cleanup_interval)
         logger.warning(f"無法解析CACHE_CLEANUP_INTERVAL值，使用預設值 {cleanup_interval} 秒: {e}")
     
+    # Docker環境下的地震模組引用修復
+    try:
+        # 確保在所有模組加載完成後手動建立引用關係
+        logger.info("Docker環境: 嘗試修復地震模組引用關係...")
+        earthquake_cog = bot.get_cog('Earthquake')
+        commands_cog = bot.get_cog('EarthquakeCommands')
+        
+        if earthquake_cog and commands_cog:
+            # 可能兩個方向都需要設置
+            commands_cog.set_earthquake_module(earthquake_cog)
+            logger.info(f"Docker環境: 已手動設置EarthquakeCommands的earthquake屬性")
+            
+            # 檢查是否成功設置
+            if commands_cog.earthquake is earthquake_cog:
+                logger.info("✓ Docker環境: 地震模組引用修復成功")
+            else:
+                logger.warning("✗ Docker環境: 地震模組引用修復失敗")
+        else:
+            if not earthquake_cog:
+                logger.error("Docker環境: 找不到Earthquake模組")
+            if not commands_cog:
+                logger.error("Docker環境: 找不到EarthquakeCommands模組")
+    except Exception as e:
+        logger.error(f"Docker環境: 修復地震模組引用關係時出錯: {e}", exc_info=True)
+    
     # 列出已加載的命令
     commands_list = [cmd.name for cmd in bot.commands]
     logger.info(f"已加載的命令: {', '.join(commands_list)}")
@@ -107,12 +132,30 @@ async def on_ready():
 async def load_cogs():
     # 加載命令模組目錄中的所有模組
     cog_count = 0
-    for fileName in os.listdir('./cmds'):
+    
+    # 先創建一個排序的文件列表
+    # 我們希望earthquake_commands.py先加載，然後再加載earthquake.py
+    file_list = sorted(os.listdir('./cmds'), key=lambda x: (
+        # 將earthquake_commands.py排在最前面
+        0 if x == 'earthquake_commands.py' else 
+        # 將earthquake.py排在earthquake_commands.py之後
+        1 if x == 'earthquake.py' else 
+        # 其他文件按字母順序排序
+        2
+    ))
+    
+    logger.info(f"Docker環境: 按優先順序加載模組: {', '.join(file_list)}")
+    
+    for fileName in file_list:
         if fileName.endswith('.py'):
             try:
                 await bot.load_extension(f'cmds.{fileName[:-3]}')
                 logger.info(f"已加載模組: {fileName}")
                 cog_count += 1
+                
+                # 特別記錄地震相關模組的加載順序
+                if fileName in ['earthquake_commands.py', 'earthquake.py']:
+                    logger.info(f"Docker環境: 成功加載地震相關模組 {fileName} (加載順序: {cog_count})")
             except Exception as e:
                 logger.error(f"加載模組 {fileName} 失敗: {str(e)}", exc_info=True)
     

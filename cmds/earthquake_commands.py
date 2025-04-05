@@ -53,6 +53,15 @@ class EarthquakeCommands(commands.Cog):
         Args:
             earthquake_module: 地震監測模組實例
         """
+        # 添加Docker環境診斷信息
+        try:
+            import platform
+            logger.info(f"==== 設置地震監測模組引用 (Docker環境) ====")
+            logger.info(f"環境: {platform.node()} | Python: {platform.python_version()}")
+            logger.info(f"引用類型: {type(earthquake_module).__name__}")
+        except ImportError:
+            pass
+            
         logger.info(f"正在嘗試設置地震監測模組引用，模組類型：{type(earthquake_module)}")
         
         # 保存舊引用，以便比較
@@ -68,14 +77,27 @@ class EarthquakeCommands(commands.Cog):
             # 記錄最後輪詢時間
             self._internal_last_poll_time = getattr(earthquake_module, 'last_poll_time', datetime.datetime.now())
             # 同步統計數據
-            self._internal_api_calls = getattr(earthquake_module, 'api_calls_total', 0)
+            self._internal_api_calls = getattr(earthquake_module, 'total_api_calls', 0)
             self._internal_skipped_calls = getattr(earthquake_module, 'api_calls_skipped', 0)
             self._internal_not_modified = getattr(earthquake_module, 'not_modified_responses', 0)
             self._internal_cache_hits = getattr(earthquake_module, 'cache_hits', 0)
             
+            # 檢查processing_events屬性
+            if hasattr(earthquake_module, 'processing_events'):
+                has_processing = True
+                events_count = len(earthquake_module.processing_events)
+            else:
+                has_processing = False
+                events_count = 0
+                
             # 輸出詳細日誌，協助調試
             logger.info(f"地震監測模組設置完成！舊引用：{old_earthquake}，新引用：{earthquake_module}")
-            logger.info(f"模組屬性檢查 - 輪詢狀態：{self._internal_polling_active}，最後輪詢時間：{self._internal_last_poll_time}")
+            logger.info(f"模組屬性檢查:")
+            logger.info(f"- 輪詢狀態：{self._internal_polling_active}")
+            logger.info(f"- 最後輪詢時間：{self._internal_last_poll_time}")
+            logger.info(f"- 處理事件集合：{'有效' if has_processing else '無效'} (包含{events_count}個事件)")
+            logger.info(f"- API調用次數：{self._internal_api_calls}")
+            logger.info(f"==== 地震監測模組引用設置完成 ====")
         else:
             logger.warning("嘗試設置的地震監測模組為None，可能會導致指令無法正常運作")
         
@@ -93,15 +115,36 @@ class EarthquakeCommands(commands.Cog):
         if self.earthquake is None:
             asyncio.create_task(ctx.send("⚠️ 地震監測模組尚未就緒，請稍後再試"))
             logger.warning(f"使用者 {ctx.author.name} 嘗試執行指令，但地震模組尚未就緒")
-            # 嘗試主動重新獲取模組引用
+            
+            # 在Docker環境中增強重試機制
+            logger.info(f"在Docker環境中嘗試主動獲取地震模組引用...")
+            
+            # 列出所有已加載的cogs，用於診斷
+            loaded_cogs = list(self.bot.cogs.keys())
+            logger.info(f"已加載的cogs: {', '.join(loaded_cogs)}")
+            
+            # 首先直接嘗試獲取Earthquake模組
             earthquake_cog = self.bot.get_cog('Earthquake')
             if earthquake_cog:
-                logger.info(f"嘗試自動獲取地震模組引用：{earthquake_cog}")
+                logger.info(f"找到地震模組: {earthquake_cog}")
                 self.set_earthquake_module(earthquake_cog)
                 # 如果成功設置，再次檢查
                 if self.earthquake is not None:
-                    logger.info("成功自動獲取地震模組引用")
+                    logger.info("✅ 成功自動獲取地震模組引用")
                     return True
+            
+            # 如果直接獲取失敗，嘗試從所有cogs中找出可能的地震模組
+            for cog_name, cog in self.bot.cogs.items():
+                # 檢查這個cog是否有地震模組的特性
+                if hasattr(cog, 'processing_events') and hasattr(cog, 'polling_active'):
+                    logger.info(f"找到可能的地震模組: {cog_name}")
+                    self.set_earthquake_module(cog)
+                    if self.earthquake is not None:
+                        logger.info(f"✅ 成功從{cog_name}獲取地震模組引用")
+                        return True
+            
+            # 如果所有嘗試都失敗
+            logger.error("🔄 所有自動獲取地震模組引用的嘗試都失敗")
             return False
         return True
         

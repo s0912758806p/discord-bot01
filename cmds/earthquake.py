@@ -1490,21 +1490,78 @@ class Earthquake(Cog_Extension):
         logger.info("地震監測模組已加載，設置為最大 %d 個連接", conn_limit)
 
     async def _setup_commands_later(self):
-        """延遲設置指令模組引用"""
+        """延遲設置指令模組引用，優化Docker環境下的初始化過程"""
         try:
             # 等待bot準備好
             await self.bot.wait_until_ready()
-            # 再等待額外的時間，確保所有cog都已加載
-            await asyncio.sleep(3)
+            logger.info("機器人已就緒，開始Docker環境下的延遲設置地震指令模組引用")
             
-            commands_cog = self.bot.get_cog('EarthquakeCommands')
-            if commands_cog:
-                commands_cog.set_earthquake_module(self)
-                logger.info("成功延遲設置地震指令模組引用")
-            else:
-                logger.error("延遲設置地震指令模組引用失敗，找不到EarthquakeCommands模組")
+            # Docker環境診斷信息
+            import platform
+            import socket
+            logger.info(f"環境信息 - 主機名:{platform.node()}, Python:{platform.python_version()}")
+            
+            # 測試網絡連通性
+            try:
+                import aiohttp
+                import time
+                start_time = time.time()
+                async with aiohttp.ClientSession() as session:
+                    async with session.get('https://discord.com/api/v10/gateway', timeout=10) as resp:
+                        elapsed = time.time() - start_time
+                        logger.info(f"Discord API連接測試 - 狀態:{resp.status}, 延遲:{elapsed:.2f}秒")
+            except Exception as e:
+                logger.warning(f"Discord API連接測試失敗: {e}")
+            
+            # 動態調整等待時間 - Docker環境需要更長的等待
+            # 第一次等待較長時間，後續逐漸縮短
+            retry_times = [10, 5, 5, 3, 3, 2, 2, 2, 1, 1]  # 總共等待34秒
+            
+            logger.info(f"Docker環境延遲初始化 - 將進行{len(retry_times)}次嘗試，總時長{sum(retry_times)}秒")
+            
+            for i, wait_time in enumerate(retry_times):
+                # 每次嘗試前先等待
+                await asyncio.sleep(wait_time)
+                
+                # 嘗試獲取指令模組
+                try:
+                    logger.info(f"第{i+1}次嘗試獲取EarthquakeCommands...")
+                    
+                    # 列出所有已加載的cogs，幫助診斷
+                    loaded_cogs = list(self.bot.cogs.keys())
+                    logger.info(f"已加載的cogs: {', '.join(loaded_cogs)}")
+                    
+                    commands_cog = self.bot.get_cog('EarthquakeCommands')
+                    if commands_cog:
+                        # 設置地震模組引用
+                        commands_cog.set_earthquake_module(self)
+                        logger.info(f"✅ 成功在Docker環境中設置地震指令模組引用 (第{i+1}次嘗試)")
+                        
+                        # 檢查引用是否真的成功設置
+                        if getattr(commands_cog, 'earthquake', None) == self:
+                            logger.info("✅ 引用檢查通過：地震指令模組成功獲取到地震監測模組引用")
+                            return
+                        else:
+                            logger.warning("⚠️ 引用檢查失敗：地震指令模組未能正確設置地震監測模組引用")
+                except Exception as e:
+                    logger.error(f"第{i+1}次嘗試獲取EarthquakeCommands時出錯: {e}")
+            
+            # 如果所有嘗試都失敗
+            logger.error(f"⚠️ 在Docker環境中經過{len(retry_times)}次嘗試後仍無法正確設置地震指令模組引用")
+            
+            # 最後一次嘗試強制設置
+            try:
+                logger.info("嘗試最後一次強制設置...")
+                for cog_name, cog in self.bot.cogs.items():
+                    if cog_name == 'EarthquakeCommands':
+                        cog.set_earthquake_module(self)
+                        logger.info("✅ 最後嘗試強制設置成功")
+                        break
+            except Exception as e:
+                logger.error(f"最後嘗試強制設置失敗: {e}")
+                
         except Exception as e:
-            logger.error(f"延遲設置地震指令模組引用時出錯: {e}", exc_info=True)
+            logger.error(f"Docker環境下設置地震指令模組引用時出錯: {e}", exc_info=True)
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Earthquake(bot)) 
