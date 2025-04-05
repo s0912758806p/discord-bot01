@@ -15,6 +15,10 @@ from core.logging import logger, measure_time
 from core.cache import cache
 from dotenv import load_dotenv
 import dateutil.parser
+import aiofiles
+import logging
+import re
+import traceback
 
 # 引入指令模組
 from cmds.earthquake_commands import EarthquakeCommands
@@ -22,127 +26,511 @@ from cmds.earthquake_commands import EarthquakeCommands
 # 載入環境變數
 load_dotenv()
 
+# 全局變數設置
+config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config')
+data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
+
+# 確保目錄存在
+os.makedirs(config_dir, exist_ok=True)
+os.makedirs(data_dir, exist_ok=True)
+os.makedirs(logs_dir, exist_ok=True)
+
 class Earthquake(Cog_Extension):
     """地震監測與通知模組"""
     
-    category = "資訊"  # 設置模組類別
-    max_stored_earthquakes = 500  # 最多儲存的地震ID數量
-    earthquake_id_ttl_days = 30  # 地震ID保留天數
-    max_earthquake_age_hours = 24  # 最大地震年齡 (小時)
-    
     def __init__(self, bot):
+        """初始化地震監測模組 - 僅設置基本屬性，不執行任何連接或任務"""
+        # VM環境診斷
+        try:
+            import platform
+            import os
+            logger.info("=========== 地震模組初始化開始 ===========")
+            logger.info(f"系統: {platform.system()} {platform.release()}")
+            logger.info(f"Python: {platform.python_version()}")
+            logger.info(f"Discord.py: {discord.__version__}")
+            logger.info(f"主機名: {platform.node()}")
+            logger.info(f"Docker環境: {os.environ.get('DOCKER_ENVIRONMENT', 'false')}")
+            logger.info(f"容器ID: {os.environ.get('HOSTNAME', 'unknown')}")
+            
+            # 檢查可用記憶體
+            try:
+                import psutil
+                mem = psutil.virtual_memory()
+                logger.info(f"記憶體: 總計 {mem.total/1048576:.1f}MB, 可用 {mem.available/1048576:.1f}MB ({mem.percent}%使用中)")
+                logger.info(f"CPU使用率: {psutil.cpu_percent(interval=0.1)}%")
+            except ImportError:
+                logger.info("psutil未安裝，跳過系統資源診斷")
+        except Exception as e:
+            logger.error(f"環境診斷錯誤: {e}")
+            
+        # 設置基本屬性
         self.bot = bot
         
-        # 載入配置文件
-        self.config = load_config('setting.json')
+        # 初始化狀態標記
+        self._initialize_status_flags()
         
-        # 初始化API請求會話
-        self.session = aiohttp.ClientSession()
+        # 載入配置
+        self._load_config()
         
-        # 發送鎖，防止重複發送
-        self.sending_lock = False
+        # 設置API端點
+        self._setup_api_endpoints()
         
-        # 地震API設定
-        self.cwb_api_url = self._safe_get_env("EARTHQUAKE_API_URL", "https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0015-001")
-        logger.debug(f"使用地震API URL: {self.cwb_api_url}")
+        logger.info("地震模組基本屬性初始化完成")
         
-        # 嘗試從環境變數獲取API金鑰
-        self.cwb_api_key = self._safe_get_env("EARTHQUAKE_API_KEY", "")
-        if not self.cwb_api_key:
-            # 從磁盤讀取API金鑰
-            api_key_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'cwb_api_key.txt')
-            if os.path.exists(api_key_path):
-                try:
-                    with open(api_key_path, 'r') as key_file:
-                        self.cwb_api_key = key_file.read().strip()
-                        logger.debug("從檔案讀取氣象局 API 金鑰")
-                except Exception as e:
-                    logger.error(f"讀取氣象局 API 金鑰失敗: {e}")
-            logger.debug(f"API金鑰狀態: {'已設置' if self.cwb_api_key else '未設置'}")
-                    
-        # 用於API條件請求
-        self.last_etag = None
-        self.last_modified = None
-        self.last_data_hash = None
+    def _initialize_status_flags(self):
+        """初始化各種狀態標記"""
+        # 初始化狀態
+        self.basic_init_complete = False  # 基本初始化
+        self.full_init_complete = False   # 完整初始化
+        self.api_ready = False            # API就緒
+        self.task_started = False         # 任務已啟動
+        self.session_created = False      # 會話已創建
+        self.commands_linked = False      # 命令模組已連結
         
-        # 輪詢控制參數
-        self.min_polling_interval = 6       # 最小輪詢間隔 (秒)
-        self.max_polling_interval = 60      # 最大輪詢間隔 (秒)
-        self.polling_interval = self.min_polling_interval  # 當前輪詢間隔
-        self.backoff_factor = 1.5           # 退避係數
-        self.max_consecutive_304 = 5        # 觸發增加輪詢間隔的連續304數量
-        self.consecutive_304 = 0            # 連續304響應計數
+        # 初始化計數器
+        self.retry_count = 0
+        self.max_retries = 15
         
-        # 多層緩存設定
-        self.memory_cache = {}              # 記憶體緩存
-        # 從環境變數讀取緩存TTL，若不存在則使用預設值30秒
-        self.cache_ttl = self._safe_get_env("CACHE_TTL", "30", int)
-        logger.debug(f"緩存TTL設置為: {self.cache_ttl}秒")
+        # 初始化處理集合
+        self.processing_events = set()  
         
-        # 性能指標
-        self.start_time = time.time()
-        self.api_calls_total = 0
-        self.api_calls_skipped = 0
-        
-        # 從環境變數獲取頻道ID
-        self.channel_id = self._safe_get_env("EARTHQUAKE_CHANNEL", "0", int)
-        logger.info(f"地震通知頻道ID設置為: {self.channel_id}")
-        
-        # 從環境變數讀取是否自動廣播今日地震
-        broadcast_str = self._safe_get_env("EARTHQUAKE_BROADCAST_TODAY", "True")
-        self.broadcast_today_earthquakes = broadcast_str.lower() in ('true', 'yes', '1', 't')
-        logger.info(f"今日地震自動廣播: {'啟用' if self.broadcast_today_earthquakes else '停用'}")
-        
-        # 從環境變數讀取最大地震年齡（小時）
-        self.max_earthquake_age_hours = self._safe_get_env("EARTHQUAKE_MAX_AGE_HOURS", "24", int)
-        logger.info(f"最大地震年齡設置為: {self.max_earthquake_age_hours}小時")
-        
-        # 其他已發送地震的記錄
-        self.last_sent_time = {}            # 發送時間字典 {channel_id: {eq_id: timestamp}}
-        self.last_earthquakes = set()       # 已處理的地震ID集合
-        self.earthquake_timestamps = {}     # 地震時間戳記錄
-        self.sent_earthquakes = set()       # 已發送的地震ID集合
-        self.is_task_running = False        # 任務執行狀態
-        
-        # 加載之前發送的地震ID
-        self._load_sent_earthquake_ids()
-        
-        # 更新任務已啟動狀態
-        self.task_started = False
-        self.consecutive_errors = 0
-        self.last_api_error_time = None
-        
-        # 建立資料目錄
-        self.data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-        if not os.path.exists(self.data_dir):
-            try:
-                os.makedirs(self.data_dir)
-                logger.debug(f"建立資料目錄: {self.data_dir}")
-            except Exception as e:
-                logger.error(f"建立資料目錄失敗: {e}")
-                
-        # 發送監測任務標記和日志清理任務
-        self.processing_events = set()  # 正在處理的事件ID
-        
-        # 設置消息冷卻時間 (5分鐘 = 300秒)
-        self.message_cooldown = self._safe_get_env("EARTHQUAKE_MESSAGE_COOLDOWN", "300", int)
-        
-        # 設置USGS API URL
-        self.usgs_api_url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
-        
-        # 確保先創建這些屬性
+        # 初始化監控屬性
         self.last_poll_time = datetime.datetime.now()
-        self.polling_active = True
-        
-        # 初始化指令模組
-        self.setup_commands()
-        
-        # 創建一個異步任務，在所有模組加載完成後設置引用
-        self.bot.loop.create_task(self._setup_commands_later())
-        
-        logger.info("地震監測模組已初始化")
+        self.polling_active = False  # 初始設為False，完全初始化後才開啟
     
-    def setup_commands(self):
+    def _load_config(self):
+        """載入配置文件"""
+        try:
+            # 載入主要配置
+            self.config = load_config('setting.json')
+            
+            # 設置API密鑰
+            self.cwb_api_key = self._safe_get_env('EARTHQUAKE_API_KEY')
+            logger.info(f"API密鑰: {'已設置' if self.cwb_api_key else '未設置'}")
+            
+            # 設置其他配置項
+            self.data_dir = 'data'
+            self.state_file = os.path.join(self.data_dir, 'earthquake_state.json')
+            self.earthquake_channel_id = self._safe_get_env("EARTHQUAKE_CHANNEL", "")
+            
+            # 初始化數據集合
+            self.sent_earthquakes = set()
+            self.last_earthquakes = set()
+            self.earthquake_timestamps = {}
+            self.last_sent_time = {}
+        except Exception as e:
+            logger.error(f"載入配置失敗: {e}", exc_info=True)
+    
+    def _setup_api_endpoints(self):
+        """設置API端點"""
+        try:
+            # 設置API URL
+            self.cwb_api_url = self._safe_get_env(
+                'EARTHQUAKE_API_URL', 
+                "https://opendata.cwb.gov.tw/api/v1/rest/datastore/E-A0015-001"
+            )
+            
+            # 設置其他API相關參數
+            self.api_cache_file = os.path.join(self.data_dir, 'earthquake_cache.json')
+            self.api_cache = {}
+            self.api_last_modified = {}
+            self.api_etags = {}
+            
+            # 設置統計計數器
+            self.total_api_calls = 0
+            self.api_calls_skipped = 0
+            self.not_modified_responses = 0
+            self.cache_hits = 0
+            self.consecutive_304_count = 0
+        except Exception as e:
+            logger.error(f"設置API端點失敗: {e}", exc_info=True)
+            
+    async def cog_load(self):
+        """模組加載時調用 - 僅執行基本初始化，完整初始化延後"""
+        try:
+            logger.info("地震模組cog_load開始")
+            
+            # 確保目錄存在
+            if not os.path.exists(self.data_dir):
+                try:
+                    os.makedirs(self.data_dir)
+                    logger.debug(f"建立資料目錄: {self.data_dir}")
+                except Exception as e:
+                    logger.error(f"建立資料目錄失敗: {e}")
+                    
+            # 載入已發送地震ID
+            self._load_sent_earthquake_ids()
+            
+            # 標記基本初始化完成
+            self.basic_init_complete = True
+            logger.info("地震模組基本初始化完成 (cog_load)")
+            
+            # 創建延遲初始化任務 - 關鍵改進點
+            self.bot.loop.create_task(self._delayed_full_initialization())
+            
+        except Exception as e:
+            logger.error(f"地震模組cog_load失敗: {e}", exc_info=True)
+    
+    async def _delayed_full_initialization(self):
+        """延遲進行完整初始化 - 等待bot就緒後執行"""
+        try:
+            # 確保等待bot完全就緒
+            await self.bot.wait_until_ready()
+            logger.info("機器人已就緒，開始地震模組延遲初始化")
+            
+            # 延遲5秒，確保所有其他模組已加載完成
+            initial_delay = int(os.environ.get('EARTHQUAKE_INITIAL_DELAY', '5'))
+            logger.info(f"等待初始延遲: {initial_delay}秒")
+            await asyncio.sleep(initial_delay)
+            
+            # 載入地震狀態
+            await self._load_earthquake_state()
+            
+            # 初始化HTTP會話 - 使用更穩定的參數
+            await self._initialize_http_session()
+            
+            # 啟動任務 - 採用多次重試機制
+            retry_times = [10, 7, 5, 5, 3, 3, 2, 2, 2, 1]  # 更長的重試間隔
+            
+            for i, wait_time in enumerate(retry_times):
+                if self.full_init_complete:
+                    break
+                    
+                try:
+                    logger.info(f"嘗試完整初始化 (第{i+1}次)")
+                    
+                    # 1. 啟動監測任務
+                    await self._start_monitoring_tasks()
+                    
+                    # 2. 設置指令模組引用
+                    await self._setup_commands_module()
+                    
+                    # 3. 進行API測試
+                    await self._test_api_connection()
+                    
+                    # 如果一切正常，標記完整初始化完成
+                    self.full_init_complete = True
+                    self.polling_active = True
+                    logger.info("✅ 地震模組完整初始化成功！")
+                    
+                    # 發送成功初始化的機器人狀態更新
+                    try:
+                        activity = discord.Activity(
+                            type=discord.ActivityType.watching, 
+                            name="地震活動 | 監測已啟動"
+                        )
+                        await self.bot.change_presence(activity=activity)
+                    except Exception as e:
+                        logger.error(f"設置狀態失敗: {e}")
+                        
+                    # 初始化成功，跳出循環
+                    break
+                    
+                except Exception as e:
+                    logger.error(f"第{i+1}次初始化嘗試失敗: {e}")
+                    
+                    # 如果AIOHTTP連接問題，重新創建會話
+                    if "aiohttp" in str(e).lower() or "session" in str(e).lower():
+                        try:
+                            if hasattr(self, 'session') and self.session and not self.session.closed:
+                                await self.session.close()
+                            await self._initialize_http_session()
+                        except Exception as session_error:
+                            logger.error(f"重建會話失敗: {session_error}")
+                
+                # 等待下一次重試
+                if not self.full_init_complete and i < len(retry_times) - 1:
+                    logger.info(f"等待{wait_time}秒後再次嘗試...")
+                    await asyncio.sleep(wait_time)
+            
+            # 如果所有重試都失敗
+            if not self.full_init_complete:
+                logger.critical("⚠️ 所有初始化嘗試都失敗，設置最小功能集")
+                self._setup_minimal_functionality()
+                
+                # 發送初始化失敗的機器人狀態更新
+                try:
+                    activity = discord.Activity(
+                        type=discord.ActivityType.watching, 
+                        name="地震活動 | ⚠️監測受限"
+                    )
+                    await self.bot.change_presence(activity=activity)
+                except Exception as e:
+                    logger.error(f"設置狀態失敗: {e}")
+            
+        except Exception as e:
+            logger.error(f"延遲初始化過程中發生錯誤: {e}", exc_info=True)
+            self._setup_minimal_functionality()
+    
+    async def _load_earthquake_state(self):
+        """載入地震狀態"""
+        try:
+            if os.path.exists(self.state_file):
+                async with aiofiles.open(self.state_file, 'r', encoding='utf-8') as f:
+                    content = await f.read()
+                    state = json.loads(content)
+                    
+                    if 'last_earthquakes' in state:
+                        self.last_earthquakes = set(state['last_earthquakes'])
+                    if 'earthquake_timestamps' in state:
+                        self.earthquake_timestamps = state['earthquake_timestamps']
+                        
+                logger.info(f"成功載入地震狀態: {len(self.last_earthquakes)}個地震記錄")
+        except Exception as e:
+            logger.error(f"載入地震狀態失敗: {e}")
+    
+    async def _initialize_http_session(self):
+        """初始化HTTP會話"""
+        try:
+            # 如果已有會話且未關閉，先關閉它
+            if hasattr(self, 'session') and self.session and not self.session.closed:
+                await self.session.close()
+                logger.info("已關閉舊的HTTP會話")
+                
+            # 創建新會話 - 使用更穩定的參數
+            timeout = aiohttp.ClientTimeout(
+                total=60,       # 整體超時60秒
+                connect=20,     # 連接超時20秒
+                sock_connect=20,  # Socket連接超時20秒
+                sock_read=30    # Socket讀取超時30秒
+            )
+            
+            connector = aiohttp.TCPConnector(
+                limit=30,                # 允許最多30個並發連接
+                ttl_dns_cache=600,       # DNS緩存10分鐘
+                enable_cleanup_closed=True,
+                force_close=False,       # 允許連接重用
+                ssl=False               # 某些系統SSL可能有問題
+            )
+            
+            self.session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=timeout,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Discord-Earthquake-Bot/1.0",
+                    "Accept": "application/json, text/html",
+                    "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8"
+                }
+            )
+            
+            self.session_created = True
+            logger.info("✅ 成功創建HTTP會話 (優化參數)")
+            
+            # 測試會話
+            await self._test_session_connection()
+            
+        except Exception as e:
+            logger.error(f"初始化HTTP會話失敗: {e}", exc_info=True)
+            self.session_created = False
+            
+    async def _test_session_connection(self):
+        """測試HTTP會話連接"""
+        try:
+            logger.info("測試HTTP會話連接...")
+            async with self.session.get("https://discord.com/api/v10/gateway", timeout=15) as resp:
+                status = resp.status
+                logger.info(f"Discord API連接測試: 狀態={status}")
+                if status != 200:
+                    logger.warning(f"Discord API連接狀態異常: {status}")
+                    
+            # 測試地震API連接 (如果有API密鑰)
+            if self.cwb_api_key:
+                async with self.session.get(
+                    self.cwb_api_url, 
+                    headers={"Authorization": self.cwb_api_key},
+                    timeout=20
+                ) as resp:
+                    status = resp.status
+                    logger.info(f"地震API連接測試: 狀態={status}")
+                    if status != 200:
+                        logger.warning(f"地震API連接狀態異常: {status}")
+            
+            self.api_ready = True
+            logger.info("✅ 網絡連接測試成功")
+            
+        except Exception as e:
+            logger.error(f"連接測試失敗: {e}")
+            self.api_ready = False
+    
+    async def _start_monitoring_tasks(self):
+        """啟動監測任務"""
+        try:
+            # 啟動地震監測任務
+            if not hasattr(self, 'earthquake_monitoring') or not self.earthquake_monitoring.is_running():
+                # 如果首次啟動
+                if not hasattr(self, 'earthquake_monitoring'):
+                    # 使用create_task而不是直接啟動，以便更好地控制啟動過程
+                    self.earthquake_monitoring.start()
+                # 如果已定義但未運行
+                elif not self.earthquake_monitoring.is_running():
+                    self.earthquake_monitoring.start()
+                    
+                logger.info("✅ 地震監測任務已啟動")
+                self.task_started = True
+            else:
+                logger.info("地震監測任務已在運行中")
+                self.task_started = True
+                
+            # 啟動日誌清理任務
+            if not hasattr(self, 'cleanup_logs') or not self.cleanup_logs.is_running():
+                self.cleanup_logs.start()
+                logger.info("✅ 日誌清理任務已啟動")
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"啟動監測任務失敗: {e}", exc_info=True)
+            self.task_started = False
+            return False
+            
+    async def _setup_commands_module(self):
+        """設置指令模組引用"""
+        try:
+            # 列出所有已加載的cogs
+            loaded_cogs = list(self.bot.cogs.keys())
+            logger.info(f"已加載的cogs: {', '.join(loaded_cogs)}")
+            
+            # 獲取EarthquakeCommands實例
+            commands_cog = self.bot.get_cog('EarthquakeCommands')
+            
+            if commands_cog:
+                # 設置地震模組引用
+                commands_cog.set_earthquake_module(self)
+                
+                # 驗證引用是否成功設置
+                if getattr(commands_cog, 'earthquake', None) is self:
+                    logger.info("✅ 成功設置地震指令模組引用")
+                    self.commands_linked = True
+                else:
+                    logger.warning("⚠️ 設置地震指令模組引用後驗證失敗")
+                    self.commands_linked = False
+            else:
+                logger.error("找不到EarthquakeCommands模組")
+                self.commands_linked = False
+                
+                # 嘗試從所有cogs中查找可能的指令模組
+                for cog_name, cog in self.bot.cogs.items():
+                    if hasattr(cog, 'set_earthquake_module'):
+                        logger.info(f"找到可能的指令模組: {cog_name}")
+                        cog.set_earthquake_module(self)
+                        if getattr(cog, 'earthquake', None) is self:
+                            logger.info(f"✅ 使用替代模組 {cog_name} 設置成功")
+                            self.commands_linked = True
+                            break
+                
+            return self.commands_linked
+            
+        except Exception as e:
+            logger.error(f"設置指令模組引用失敗: {e}", exc_info=True)
+            self.commands_linked = False
+            return False
+            
+    async def _test_api_connection(self):
+        """測試API連接"""
+        if not self.cwb_api_key:
+            logger.warning("未設置API密鑰，跳過API測試")
+            return False
+            
+        try:
+            logger.info("測試地震API連接...")
+            
+            headers = {"Authorization": self.cwb_api_key}
+            params = {"limit": 1, "offset": 0}
+            
+            async with self.session.get(self.cwb_api_url, headers=headers, params=params, timeout=20) as resp:
+                status = resp.status
+                
+                if status == 200:
+                    data = await resp.json()
+                    
+                    # 檢查回應結構
+                    if "records" in data and "earthquake" in data["records"]:
+                        count = len(data["records"]["earthquake"])
+                        logger.info(f"✅ API測試成功: 取得{count}筆地震資料")
+                        self.api_ready = True
+                        return True
+                    else:
+                        logger.warning(f"API測試: 回應格式異常")
+                        self.api_ready = False
+                        return False
+                else:
+                    logger.warning(f"API測試失敗: 狀態碼 {status}")
+                    self.api_ready = False
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"API測試出錯: {e}")
+            self.api_ready = False
+            return False
+    
+    async def restart_earthquake_module(self):
+        """重新啟動地震模組（自修復機制）"""
+        logger.info("嘗試重新啟動地震模組...")
+        
+        # 清理現有資源
+        try:
+            # 停止監測任務
+            if hasattr(self, 'earthquake_monitoring') and self.earthquake_monitoring.is_running():
+                self.earthquake_monitoring.cancel()
+                logger.info("已停止地震監測任務")
+                
+            # 停止日志清理任務
+            if hasattr(self, 'cleanup_logs') and self.cleanup_logs.is_running():
+                self.cleanup_logs.cancel()
+                logger.info("已停止日志清理任務")
+                
+            # 關閉HTTP會話
+            if hasattr(self, 'session') and self.session and not self.session.closed:
+                await self.session.close()
+                logger.info("已關閉HTTP會話")
+                
+            # 標記未就緒
+            self.full_init_complete = False
+            self.polling_active = False
+            self.task_started = False
+            self.session_created = False
+            self.api_ready = False
+        except Exception as e:
+            logger.error(f"清理資源時出錯: {e}")
+            
+        # 重新初始化
+        try:
+            # 重設基本狀態
+            self.polling_active = False
+            self.last_poll_time = datetime.datetime.now()
+            
+            # 重新初始化HTTP會話
+            await self._initialize_http_session()
+            
+            # 重新測試API連接
+            await self._test_api_connection()
+            
+            # 重新啟動監測任務
+            success_tasks = await self._start_monitoring_tasks()
+            
+            # 重新設置指令模組引用
+            success_commands = await self._setup_commands_module()
+            
+            # 標記就緒
+            if success_tasks and success_commands:
+                self.full_init_complete = True
+                self.polling_active = True
+                logger.info("✅ 地震模組重新啟動成功！")
+                return True
+            else:
+                logger.warning(f"部分重啟失敗 - 任務: {success_tasks}, 命令: {success_commands}")
+                self.full_init_complete = False
+                self.polling_active = False
+                return False
+                
+        except Exception as e:
+            logger.error(f"重新啟動地震模組失敗: {e}", exc_info=True)
+            # 設置最小功能集
+            self._setup_minimal_functionality()
+            return False
+
+    def _setup_commands(self):
         """初始化並設置指令模組"""
         try:
             # 確保初始化時創建這些屬性，以便命令能正常工作
@@ -371,78 +759,80 @@ class Earthquake(Cog_Extension):
         
         logger.info(f"已從配置文件載入 {len(self.last_earthquakes)} 個地震ID記錄")
         
-    async def cog_load(self):
-        """當模組被Discord.py加載後調用"""
-        logger.info("地震監測模組正在加載...")
-        
-        # 確保初始化狀態屬性
-        self.last_poll_time = datetime.datetime.now()
-        self.polling_active = True
-        
-        # 統計計數器
-        self.total_api_calls = 0
-        self.not_modified_responses = 0
-        self.cache_hits = 0
-        self.consecutive_304_count = 0
-        
-        # 啟動監測任務
-        self._start_earthquake_monitoring()
-        
-        # 設置指令模組的引用
-        # 這將在所有Cog都加載完成後執行
-        asyncio.create_task(self._setup_command_reference_later())
-        
-        logger.info("地震監測模組加載完成")
-
-    async def _setup_command_reference_later(self):
-        """在所有Cog加載完成後設置指令模組的引用"""
-        # 等待所有模組加載完成
-        await asyncio.sleep(3)
-        
-        # 再次嘗試設置地震模組引用
+    async def _setup_commands_later(self):
+        """延遲設置指令模組引用，優化Docker環境下的初始化過程"""
         try:
-            commands_cog = self.bot.get_cog('EarthquakeCommands')
-            if commands_cog:
-                # 設置地震模組引用
-                commands_cog.set_earthquake_module(self)
-                logger.info("成功延遲設置地震指令模組引用")
-            else:
-                logger.warning("延遲設置地震指令模組引用失敗，找不到EarthquakeCommands模組")
-        except Exception as e:
-            logger.error(f"延遲設置地震指令模組引用時出錯: {e}", exc_info=True)
-    
-    async def cog_unload(self):
-        """卸載模組時調用"""
-        # 先取消任務
-        if hasattr(self, 'earthquake_monitoring') and self.earthquake_monitoring.is_running():
-            self.earthquake_monitoring.cancel()
-            self._monitoring_started = False
-            logger.info("地震監測任務已取消")
-        
-        # 取消日誌清理任務
-        if hasattr(self, 'cleanup_logs') and self.cleanup_logs.is_running():
-            self.cleanup_logs.cancel()
-            self._cleanup_started = False
-            logger.info("日誌清理任務已取消")
-        
-        # 保存當前狀態
-        self._save_earthquake_state()
-        
-        # 最後關閉會話
-        if self.session:
-            pending_requests = not self.session.closed
-            if pending_requests:
-                try:
-                    await asyncio.wait_for(self.session.close(), timeout=5.0)
-                    logger.info("成功關閉HTTP會話")
-                except asyncio.TimeoutError:
-                    logger.warning("關閉HTTP會話超時")
-            else:
-                logger.info("HTTP會話已關閉")
+            # 等待bot準備好
+            await self.bot.wait_until_ready()
+            logger.info("機器人已就緒，開始Docker環境下的延遲設置地震指令模組引用")
+            
+            # Docker環境診斷信息
+            import platform
+            import socket
+            logger.info(f"環境信息 - 主機名:{platform.node()}, Python:{platform.python_version()}")
+            
+            # 測試網絡連通性
+            try:
+                import aiohttp
+                import time
+                start_time = time.time()
+                async with aiohttp.ClientSession() as session:
+                    async with session.get('https://discord.com/api/v10/gateway', timeout=10) as resp:
+                        elapsed = time.time() - start_time
+                        logger.info(f"Discord API連接測試 - 狀態:{resp.status}, 延遲:{elapsed:.2f}秒")
+            except Exception as e:
+                logger.warning(f"Discord API連接測試失敗: {e}")
+            
+            # 動態調整等待時間 - Docker環境需要更長的等待
+            # 第一次等待較長時間，後續逐漸縮短
+            retry_times = [10, 5, 5, 3, 3, 2, 2, 2, 1, 1]  # 總共等待34秒
+            
+            logger.info(f"Docker環境延遲初始化 - 將進行{len(retry_times)}次嘗試，總時長{sum(retry_times)}秒")
+            
+            for i, wait_time in enumerate(retry_times):
+                # 每次嘗試前先等待
+                await asyncio.sleep(wait_time)
                 
-        logger.info("地震監測模組已完全卸載")
-        
-    # 將固定的輪詢間隔2分鐘改為自適應輪詢
+                # 嘗試獲取指令模組
+                try:
+                    logger.info(f"第{i+1}次嘗試獲取EarthquakeCommands...")
+                    
+                    # 列出所有已加載的cogs，幫助診斷
+                    loaded_cogs = list(self.bot.cogs.keys())
+                    logger.info(f"已加載的cogs: {', '.join(loaded_cogs)}")
+                    
+                    commands_cog = self.bot.get_cog('EarthquakeCommands')
+                    if commands_cog:
+                        # 設置地震模組引用
+                        commands_cog.set_earthquake_module(self)
+                        logger.info(f"✅ 成功在Docker環境中設置地震指令模組引用 (第{i+1}次嘗試)")
+                        
+                        # 檢查引用是否真的成功設置
+                        if getattr(commands_cog, 'earthquake', None) == self:
+                            logger.info("✅ 引用檢查通過：地震指令模組成功獲取到地震監測模組引用")
+                            return
+                        else:
+                            logger.warning("⚠️ 引用檢查失敗：地震指令模組未能正確設置地震監測模組引用")
+                except Exception as e:
+                    logger.error(f"第{i+1}次嘗試獲取EarthquakeCommands時出錯: {e}")
+            
+            # 如果所有嘗試都失敗
+            logger.error(f"⚠️ 在Docker環境中經過{len(retry_times)}次嘗試後仍無法正確設置地震指令模組引用")
+            
+            # 最後一次嘗試強制設置
+            try:
+                logger.info("嘗試最後一次強制設置...")
+                for cog_name, cog in self.bot.cogs.items():
+                    if cog_name == 'EarthquakeCommands':
+                        cog.set_earthquake_module(self)
+                        logger.info("✅ 最後嘗試強制設置成功")
+                        break
+            except Exception as e:
+                logger.error(f"最後嘗試強制設置失敗: {e}")
+                
+        except Exception as e:
+            logger.error(f"Docker環境下設置地震指令模組引用時出錯: {e}", exc_info=True)
+
     @tasks.loop(seconds=6)  # 初始間隔6秒
     async def earthquake_monitoring(self):
         """高效率地震監測：自適應輪詢間隔、條件請求和多層緩存"""
@@ -1562,6 +1952,28 @@ class Earthquake(Cog_Extension):
                 
         except Exception as e:
             logger.error(f"Docker環境下設置地震指令模組引用時出錯: {e}", exc_info=True)
+
+    def _setup_minimal_functionality(self):
+        """設置最小功能集，當完整初始化失敗時啟用"""
+        try:
+            logger.warning("⚠️ 啟動最小功能集模式")
+            # 設置基本標記
+            self.full_init_complete = False
+            self.api_ready = False
+            self.polling_active = False
+            
+            # 確保不會執行過於頻繁的API調用
+            if not hasattr(self, 'polling_interval'):
+                self.polling_interval = 60  # 最小功能集使用更長的間隔
+                self.min_polling_interval = 30
+                self.max_polling_interval = 300
+                self.backoff_factor = 2.0
+            
+            # 設置其他限制
+            self.limited_functionality = True
+            logger.warning("⚠️ 已啟動最小功能集，僅提供基本服務")
+        except Exception as e:
+            logger.error(f"設置最小功能集時發生錯誤: {e}")
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Earthquake(bot)) 

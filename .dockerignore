@@ -1,0 +1,76 @@
+# 版本控制
+.git
+.gitignore
+.github
+
+# 環境和配置
+.env
+.env.*
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 日誌和臨時文件
+logs/*.log*
+*.log
+tmp/
+.tmp/
+temp/
+.temp/
+
+# 測試和文檔
+test/
+tests/
+docs/
+*.md
+!README.md
+
+# 編輯器和IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 特定於項目的文件
+node_modules/
+npm-debug.log
+
+# 運行時生成的文件
+*.sqlite
+*.db
+*.sqlite3
+**/data/*.json
+docker-compose*.yml
+Dockerfile.*
+
+# 腳本和其他文件
+vm_repair.sh
+vm_health_monitor.sh
+test_module_connector.py
+
+# 保留必要文件
+!requirements.txt
+!.dockerignore
+!config/
+!start.sh 

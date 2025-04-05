@@ -29,6 +29,128 @@ class EarthquakeCommands(commands.Cog):
         self._internal_processing_events = set()
         # 初始化基本屬性，即使地震模組未準備好時也可使用
         self._initalize_default_properties()
+        # 紀錄初始化狀態
+        self.module_ready = False
+        self.auto_recovery_attempts = 0
+        self.max_auto_recovery = 5
+        self.last_recovery_time = datetime.datetime.now() - datetime.timedelta(hours=1)
+        
+        # 在初始化時設置自動檢查任務
+        self.bot.loop.create_task(self._delayed_earthquake_module_check())
+        
+        logger.info("地震指令模組初始化完成")
+        
+    async def _delayed_earthquake_module_check(self):
+        """延遲檢查地震模組是否可用，並在必要時自動嘗試獲取引用"""
+        # 等待bot就緒
+        await self.bot.wait_until_ready()
+        logger.info("開始延遲檢查地震模組引用")
+        
+        # 等待額外時間確保所有模組加載完成
+        initial_delay = int(os.environ.get('EARTHQUAKE_COMMANDS_DELAY', '15'))
+        await asyncio.sleep(initial_delay)
+        
+        # 檢查引用是否已設置
+        if self.earthquake is None:
+            logger.warning("延遲檢查發現地震模組引用未設置，嘗試獲取...")
+            await self._auto_get_earthquake_module()
+        else:
+            if hasattr(self.earthquake, 'full_init_complete') and self.earthquake.full_init_complete:
+                logger.info("地震模組引用已設置且初始化完成")
+                self.module_ready = True
+            else:
+                logger.warning("地震模組引用已設置但未完全初始化")
+                
+        # 每分鐘檢查一次，確保引用持續可用
+        while True:
+            await asyncio.sleep(60)
+            if self.earthquake is None or not self.module_ready:
+                logger.warning("定期檢查發現地震模組引用不可用，嘗試恢復...")
+                await self._auto_get_earthquake_module()
+            else:
+                # 檢查模組的健康狀態
+                try:
+                    if hasattr(self.earthquake, 'polling_active') and not self.earthquake.polling_active:
+                        logger.warning("地震模組輪詢未活動，嘗試重啟...")
+                        await self._auto_restart_module()
+                except Exception as e:
+                    logger.error(f"檢查地震模組健康狀態時出錯: {e}")
+    
+    async def _auto_get_earthquake_module(self):
+        """自動嘗試獲取地震模組引用"""
+        now = datetime.datetime.now()
+        # 如果最近已嘗試過恢復，則跳過以避免過於頻繁的嘗試
+        if (now - self.last_recovery_time).total_seconds() < 300:  # 5分鐘內不重複嘗試
+            return False
+            
+        self.last_recovery_time = now
+        self.auto_recovery_attempts += 1
+        
+        if self.auto_recovery_attempts > self.max_auto_recovery:
+            logger.error(f"已達到最大自動恢復嘗試次數 ({self.max_auto_recovery})，停止嘗試")
+            return False
+            
+        logger.info(f"自動恢復嘗試 #{self.auto_recovery_attempts}: 尋找地震模組引用")
+        
+        # 嘗試獲取Earthquake模組實例
+        earthquake_cog = self.bot.get_cog('Earthquake')
+        if earthquake_cog:
+            logger.info(f"找到地震模組: {earthquake_cog}")
+            self.set_earthquake_module(earthquake_cog)
+            # 檢查設置是否成功
+            if self.earthquake is not None:
+                logger.info("✅ 自動恢復成功: 獲取到地震模組引用")
+                
+                # 檢查模組初始化狀態
+                if hasattr(self.earthquake, 'full_init_complete') and self.earthquake.full_init_complete:
+                    logger.info("地震模組已完全初始化")
+                    self.module_ready = True
+                else:
+                    logger.warning("地震模組未完全初始化，嘗試重啟...")
+                    await self._auto_restart_module()
+                    
+                return True
+                
+        # 如果找不到名為Earthquake的cog，嘗試從所有cog中找到可能的地震模組
+        logger.warning("找不到標準地震模組，嘗試尋找替代模組...")
+        for cog_name, cog in self.bot.cogs.items():
+            # 檢查這個cog是否有地震模組的關鍵屬性
+            if hasattr(cog, 'processing_events') and hasattr(cog, 'earthquake_monitoring'):
+                logger.info(f"找到可能的地震模組: {cog_name}")
+                self.set_earthquake_module(cog)
+                if self.earthquake is not None:
+                    logger.info(f"✅ 使用替代模組 {cog_name} 自動恢復成功")
+                    self.module_ready = True
+                    return True
+                    
+        logger.error("❌ 自動恢復失敗: 無法找到任何可用的地震模組")
+        return False
+        
+    async def _auto_restart_module(self):
+        """嘗試自動重啟地震模組"""
+        if self.earthquake is None:
+            logger.error("無法重啟地震模組: 模組引用為空")
+            return False
+            
+        logger.info("嘗試自動重啟地震模組...")
+        
+        try:
+            # 檢查模組是否有重啟方法
+            if hasattr(self.earthquake, 'restart_earthquake_module'):
+                success = await self.earthquake.restart_earthquake_module()
+                if success:
+                    logger.info("✅ 地震模組自動重啟成功")
+                    self.module_ready = True
+                    return True
+                else:
+                    logger.error("❌ 地震模組自動重啟失敗")
+                    return False
+            else:
+                logger.warning("地震模組沒有restart_earthquake_module方法，無法重啟")
+                return False
+        except Exception as e:
+            logger.error(f"自動重啟地震模組時出錯: {e}")
+            return False
         
     def _initalize_default_properties(self):
         """初始化默認屬性，以便在地震模組不可用時也能使用部分功能"""
@@ -90,6 +212,12 @@ class EarthquakeCommands(commands.Cog):
                 has_processing = False
                 events_count = 0
                 
+            # 檢查初始化狀態
+            if hasattr(earthquake_module, 'full_init_complete'):
+                self.module_ready = earthquake_module.full_init_complete
+            else:
+                self.module_ready = False
+                
             # 輸出詳細日誌，協助調試
             logger.info(f"地震監測模組設置完成！舊引用：{old_earthquake}，新引用：{earthquake_module}")
             logger.info(f"模組屬性檢查:")
@@ -97,9 +225,11 @@ class EarthquakeCommands(commands.Cog):
             logger.info(f"- 最後輪詢時間：{self._internal_last_poll_time}")
             logger.info(f"- 處理事件集合：{'有效' if has_processing else '無效'} (包含{events_count}個事件)")
             logger.info(f"- API調用次數：{self._internal_api_calls}")
+            logger.info(f"- 模組完整初始化: {'是' if self.module_ready else '否'}")
             logger.info(f"==== 地震監測模組引用設置完成 ====")
         else:
             logger.warning("嘗試設置的地震監測模組為None，可能會導致指令無法正常運作")
+            self.module_ready = False
         
         return self
         
@@ -112,12 +242,12 @@ class EarthquakeCommands(commands.Cog):
         Returns:
             bool: 地震模組是否可用
         """
-        if self.earthquake is None:
-            asyncio.create_task(ctx.send("⚠️ 地震監測模組尚未就緒，請稍後再試"))
+        if self.earthquake is None or not self.module_ready:
+            asyncio.create_task(self._send_module_not_ready_message(ctx))
             logger.warning(f"使用者 {ctx.author.name} 嘗試執行指令，但地震模組尚未就緒")
             
             # 在Docker環境中增強重試機制
-            logger.info(f"在Docker環境中嘗試主動獲取地震模組引用...")
+            logger.info(f"在VM環境中嘗試主動獲取地震模組引用...")
             
             # 列出所有已加載的cogs，用於診斷
             loaded_cogs = list(self.bot.cogs.keys())
@@ -131,7 +261,14 @@ class EarthquakeCommands(commands.Cog):
                 # 如果成功設置，再次檢查
                 if self.earthquake is not None:
                     logger.info("✅ 成功自動獲取地震模組引用")
-                    return True
+                    
+                    # 檢查模組是否已完全初始化
+                    if hasattr(self.earthquake, 'full_init_complete') and self.earthquake.full_init_complete:
+                        self.module_ready = True
+                        return True
+                    else:
+                        # 嘗試重啟模組
+                        asyncio.create_task(self._auto_restart_module())
             
             # 如果直接獲取失敗，嘗試從所有cogs中找出可能的地震模組
             for cog_name, cog in self.bot.cogs.items():
@@ -139,14 +276,58 @@ class EarthquakeCommands(commands.Cog):
                 if hasattr(cog, 'processing_events') and hasattr(cog, 'polling_active'):
                     logger.info(f"找到可能的地震模組: {cog_name}")
                     self.set_earthquake_module(cog)
-                    if self.earthquake is not None:
+                    if self.earthquake is not None and hasattr(cog, 'full_init_complete') and cog.full_init_complete:
                         logger.info(f"✅ 成功從{cog_name}獲取地震模組引用")
+                        self.module_ready = True
                         return True
             
             # 如果所有嘗試都失敗
             logger.error("🔄 所有自動獲取地震模組引用的嘗試都失敗")
             return False
         return True
+        
+    async def _send_module_not_ready_message(self, ctx):
+        """發送地震模組未就緒的消息，並提供更詳細的診斷信息"""
+        embed = discord.Embed(
+            title="⚠️ 地震監測模組尚未就緒",
+            description="系統正在初始化地震監測模組，請稍後再試",
+            color=0xFF9900
+        )
+        
+        # 添加模組狀態
+        status_fields = []
+        if self.earthquake is None:
+            status_fields.append("❌ 模組引用缺失")
+        else:
+            if hasattr(self.earthquake, 'basic_init_complete'):
+                status_fields.append(f"基本初始化: {'✅' if self.earthquake.basic_init_complete else '❌'}")
+            if hasattr(self.earthquake, 'full_init_complete'):
+                status_fields.append(f"完整初始化: {'✅' if self.earthquake.full_init_complete else '❌'}")
+            if hasattr(self.earthquake, 'polling_active'):
+                status_fields.append(f"輪詢活動: {'✅' if self.earthquake.polling_active else '❌'}")
+                
+        if status_fields:
+            embed.add_field(name="模組狀態", value="\n".join(status_fields), inline=False)
+            
+        # 添加恢復信息
+        embed.add_field(
+            name="自動恢復",
+            value=f"系統已嘗試 {self.auto_recovery_attempts}/{self.max_auto_recovery} 次自動恢復",
+            inline=False
+        )
+        
+        # 添加建議操作
+        embed.add_field(
+            name="建議操作",
+            value="請等待5分鐘後再試，或聯絡管理員重啟機器人",
+            inline=False
+        )
+        
+        # 添加時間戳
+        embed.set_footer(text=f"診斷時間: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 發送消息
+        await ctx.send(embed=embed)
         
     def _get_processing_events(self):
         """獲取處理事件集合
@@ -156,7 +337,7 @@ class EarthquakeCommands(commands.Cog):
         Returns:
             set: 正在處理的事件集合
         """
-        if self.earthquake is not None:
+        if self.earthquake is not None and hasattr(self.earthquake, 'processing_events'):
             return self.earthquake.processing_events
         return self._internal_processing_events
     
@@ -952,6 +1133,236 @@ class EarthquakeCommands(commands.Cog):
         finally:
             # 移除處理標記
             processing_events.discard(cmd_key)
+
+    @commands.command(name='地震模組狀態', help='檢查地震模組初始化狀態')
+    @commands.has_permissions(administrator=True)
+    async def check_earthquake_module_status(self, ctx):
+        """檢查地震模組初始化狀態的管理員指令"""
+        
+        embed = discord.Embed(
+            title="🔍 地震模組初始化狀態檢查",
+            description="詳細顯示地震模組的初始化狀態與相關屬性",
+            color=0x3498DB
+        )
+        
+        # 基本模組信息
+        module_info = []
+        if self.earthquake is None:
+            module_info.append("❌ 模組引用缺失 - 地震指令模組未能獲取地震模組引用")
+            # 添加恢復嘗試信息
+            embed.add_field(
+                name="自動恢復信息",
+                value=f"已嘗試自動恢復 {self.auto_recovery_attempts}/{self.max_auto_recovery} 次\n最後嘗試時間: {self.last_recovery_time.strftime('%Y-%m-%d %H:%M:%S')}",
+                inline=False
+            )
+            # 添加模組就緒狀態
+            embed.add_field(
+                name="模組就緒狀態",
+                value=f"指令模組就緒: {'✅' if self.module_ready else '❌'}",
+                inline=False
+            )
+        else:
+            module_info.append("✅ 模組引用存在")
+            module_info.append(f"模組類型: {type(self.earthquake).__name__}")
+            
+            # 檢查模組的各種屬性
+            # 1. 基本初始化
+            if hasattr(self.earthquake, 'basic_init_complete'):
+                module_info.append(f"基本初始化: {'✅' if self.earthquake.basic_init_complete else '❌'}")
+                
+            # 2. 完整初始化
+            if hasattr(self.earthquake, 'full_init_complete'):
+                module_info.append(f"完整初始化: {'✅' if self.earthquake.full_init_complete else '❌'}")
+                
+            # 3. 輪詢狀態
+            if hasattr(self.earthquake, 'polling_active'):
+                module_info.append(f"輪詢活動: {'✅' if self.earthquake.polling_active else '❌'}")
+                
+            # 4. 任務狀態
+            if hasattr(self.earthquake, 'task_started'):
+                module_info.append(f"監測任務: {'✅' if self.earthquake.task_started else '❌'}")
+                
+            # 5. 初始化時間
+            if hasattr(self.earthquake, 'init_time'):
+                module_info.append(f"初始化時間: {self.earthquake.init_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                
+            # 6. 初始化重試次數
+            if hasattr(self.earthquake, 'init_retries'):
+                module_info.append(f"初始化嘗試次數: {self.earthquake.init_retries}")
+            
+            embed.add_field(
+                name="模組基本信息",
+                value="\n".join(module_info),
+                inline=False
+            )
+            
+            # 輪詢信息
+            polling_info = []
+            if hasattr(self.earthquake, 'last_poll_time'):
+                last_poll = self.earthquake.last_poll_time
+                time_since_poll = datetime.datetime.now() - last_poll
+                polling_info.append(f"最後輪詢時間: {last_poll.strftime('%Y-%m-%d %H:%M:%S')} ({time_since_poll.total_seconds():.1f}秒前)")
+                
+            if hasattr(self.earthquake, 'polling_interval'):
+                polling_info.append(f"輪詢間隔: {self.earthquake.polling_interval}秒")
+                
+            if hasattr(self.earthquake, 'total_api_calls'):
+                polling_info.append(f"API調用次數: {self.earthquake.total_api_calls}")
+                
+            if hasattr(self.earthquake, 'api_calls_skipped'):
+                polling_info.append(f"跳過的API調用: {self.earthquake.api_calls_skipped}")
+                
+            if hasattr(self.earthquake, 'not_modified_responses'):
+                polling_info.append(f"未修改的響應: {self.earthquake.not_modified_responses}")
+                
+            if hasattr(self.earthquake, 'cache_hits'):
+                polling_info.append(f"緩存命中: {self.earthquake.cache_hits}")
+                
+            if polling_info:
+                embed.add_field(
+                    name="輪詢狀態信息",
+                    value="\n".join(polling_info),
+                    inline=False
+                )
+                
+            # 處理事件信息
+            event_info = []
+            if hasattr(self.earthquake, 'processing_events'):
+                event_info.append(f"正在處理的事件數: {len(self.earthquake.processing_events)}")
+                
+            if hasattr(self.earthquake, 'processed_events'):
+                event_info.append(f"已處理的事件數: {len(self.earthquake.processed_events)}")
+                
+            if hasattr(self.earthquake, 'last_earthquakes'):
+                event_info.append(f"最近地震事件數: {len(self.earthquake.last_earthquakes)}")
+                
+            if event_info:
+                embed.add_field(
+                    name="事件處理信息",
+                    value="\n".join(event_info),
+                    inline=False
+                )
+            
+            # API連接信息
+            api_info = []
+            if hasattr(self.earthquake, 'api_key'):
+                has_key = bool(self.earthquake.api_key)
+                api_info.append(f"API金鑰: {'✅ 已設置' if has_key else '❌ 未設置'}")
+                
+            if hasattr(self.earthquake, 'api_endpoint'):
+                api_info.append(f"API端點: {self.earthquake.api_endpoint}")
+                
+            if hasattr(self.earthquake, 'session') and self.earthquake.session:
+                api_info.append("✅ HTTP會話: 活動")
+            else:
+                api_info.append("❌ HTTP會話: 未活動")
+                
+            if api_info:
+                embed.add_field(
+                    name="API連接信息",
+                    value="\n".join(api_info),
+                    inline=False
+                )
+            
+            # 模組連接器信息
+            if hasattr(self.bot, '_module_connector'):
+                connector = self.bot._module_connector
+                if connector:
+                    connect_info = []
+                    connect_info.append(f"連接器初始化: {'✅' if connector.init_complete else '❌'}")
+                    
+                    # 檢查是否註冊了地震模組
+                    earthquake_registered = 'Earthquake' in connector.modules
+                    connect_info.append(f"地震模組註冊: {'✅' if earthquake_registered else '❌'}")
+                    
+                    # 檢查是否註冊了地震指令模組
+                    commands_registered = 'EarthquakeCommands' in connector.modules
+                    connect_info.append(f"地震指令模組註冊: {'✅' if commands_registered else '❌'}")
+                    
+                    # 檢查地震模組狀態
+                    if earthquake_registered:
+                        eq_state = connector.module_states['Earthquake']
+                        connect_info.append(f"地震模組就緒: {'✅' if eq_state['ready'] else '❌'}")
+                        
+                    embed.add_field(
+                        name="模組連接器信息",
+                        value="\n".join(connect_info),
+                        inline=False
+                    )
+        
+        # 添加診斷建議
+        suggestions = []
+        if self.earthquake is None:
+            suggestions.append("• 使用 `!重啟地震模組` 嘗試重新初始化")
+            suggestions.append("• 檢查模組加載順序")
+            suggestions.append("• 嘗試重啟整個機器人")
+        elif hasattr(self.earthquake, 'polling_active') and not self.earthquake.polling_active:
+            suggestions.append("• 使用 `!重啟地震模組` 嘗試重新啟動輪詢")
+            suggestions.append("• 檢查API金鑰是否有效")
+            suggestions.append("• 檢查網絡連接是否穩定")
+        elif not self.module_ready:
+            suggestions.append("• 等待幾分鐘，讓模組完成初始化")
+            suggestions.append("• 使用 `!重啟地震模組` 嘗試加速初始化")
+            suggestions.append("• 如問題持續存在，嘗試重啟機器人")
+            
+        if suggestions:
+            embed.add_field(
+                name="診斷建議",
+                value="\n".join(suggestions),
+                inline=False
+            )
+            
+        # 添加時間戳
+        embed.set_footer(text=f"診斷時間: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        await ctx.send(embed=embed)
+
+    @commands.command(name="重啟地震模組")
+    @commands.has_permissions(administrator=True)
+    async def restart_earthquake_module_cmd(self, ctx):
+        """重新啟動地震監測模組 (管理員指令)"""
+        # 檢查地震模組是否可用
+        if not self._check_earthquake_module(ctx):
+            await ctx.send("⚠️ 無法重啟：地震模組尚未就緒，正在嘗試自動恢復...")
+            # 嘗試自動恢復
+            success = await self._auto_get_earthquake_module()
+            if success:
+                await ctx.send("✅ 成功獲取地震模組引用，繼續重啟操作...")
+            else:
+                await ctx.send("❌ 無法獲取地震模組引用，重啟失敗")
+                return
+        
+        await ctx.send("🔄 正在重新啟動地震監測模組...")
+        
+        try:
+            # 使用地震模組的restart_earthquake_module方法
+            if hasattr(self.earthquake, 'restart_earthquake_module'):
+                success = await self.earthquake.restart_earthquake_module()
+                
+                if success:
+                    await ctx.send("✅ 地震監測模組已成功重新啟動！")
+                    
+                    # 檢查模組狀態
+                    status_msg = [
+                        "**📊 模組狀態:**",
+                        f"- 輪詢狀態: {'✅ 正在運行' if self.earthquake.polling_active else '❌ 未運行'}",
+                        f"- 最後輪詢時間: {self.earthquake.last_poll_time.strftime('%Y-%m-%d %H:%M:%S')}",
+                        f"- API密鑰: {'✅ 已設置' if self.earthquake.cwb_api_key else '❌ 未設置'}"
+                    ]
+                    
+                    await ctx.send("\n".join(status_msg))
+                else:
+                    await ctx.send("❌ 地震監測模組重新啟動失敗")
+                    await ctx.send("請檢查日誌以了解詳細錯誤信息")
+            else:
+                await ctx.send("❌ 地震模組不支持重啟操作")
+                
+        except Exception as e:
+            await ctx.send(f"❌ 重啟過程中發生錯誤: {str(e)}")
+            logger.error(f"重啟地震模組時出錯: {e}", exc_info=True)
+            
+        # 記錄管理員操作
+        logger.info(f"管理員 {ctx.author.name} 執行了地震模組重啟指令")
 
 
 def setup(bot):

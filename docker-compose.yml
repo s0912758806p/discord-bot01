@@ -1,22 +1,36 @@
-version: '3'
+version: '3.8'
 
 services:
   discord-bot:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     container_name: discord-bot
     restart: unless-stopped
+    # 增加啟動等待時間，有利於穩定初始化
+    stop_grace_period: 30s
+    init: true
     ports:
-      - "8080:8080"  # 映射Web服務端口
+      - "8080:8080"  # Web服務端口
     volumes:
       - ./logs:/app/logs
       - ./setting.json:/app/setting.json
       - ./assets:/app/assets
       - ./.env:/app/.env
+      - ./config:/app/config  # 額外掛載配置目錄
+      - ./data:/app/data      # 額外掛載資料目錄
     env_file:
       - .env
     environment:
       - TZ=Asia/Taipei
-      - PYTHONUNBUFFERED=1  # 確保Python輸出不被緩存，方便查看日誌
+      - PYTHONUNBUFFERED=1
+      # VM環境初始化參數
+      - VM_ENVIRONMENT=true
+      - VM_MEMORY_LIMIT_MB=512
+      - DISCORD_RECONNECT_TIMEOUT=60
+      # 地震模組優化參數
+      - EARTHQUAKE_MODULE_RETRY_COUNT=15
+      - EARTHQUAKE_MODULE_MAX_WAIT_SEC=120
     deploy:
       resources:
         limits:
@@ -24,14 +38,29 @@ services:
           cpus: '1'
         reservations:
           memory: 512M
-          cpus: '0.5'
+          cpus: '0.25'
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('discord.com', 443))"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s  # 給予足夠的初始化時間
+    # 使用host網絡以改善網絡連接性能
+    # 注意：在某些環境中可能需要取消註釋此選項
+    # network_mode: "host"
+    networks:
+      - bot-network
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
     logging:
       driver: "json-file"
       options:
-        max-size: "10m"
-        max-file: "3" 
+        max-size: "20m"
+        max-file: "5"
+        compress: "true"
+
+networks:
+  bot-network:
+    driver: bridge 

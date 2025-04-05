@@ -1,0 +1,55 @@
+{
+  "module_connector": {
+    "enabled": true,
+    "log_level": "INFO",
+    "connection_timeout": 30,
+    "retry_attempts": 3,
+    "retry_delay": 5
+  },
+  "earthquake": {
+    "enabled": true,
+    "api_key": "test_api_key",
+    "log_level": "INFO",
+    "refresh_interval": 300,
+    "max_display_count": 5,
+    "watch_channels": ["123456789"],
+    "alert_channels": ["987654321"],
+    "vm_environment": {
+      "enabled": true,
+      "delayed_initialization": true,
+      "init_attempts": 5,
+      "init_delay": 15,
+      "memory_threshold": {
+        "warning": 70,
+        "critical": 90
+      },
+      "cpu_threshold": {
+        "warning": 80,
+        "critical": 95
+      }
+    },
+    "dependencies": ["module_connector", "earthquake_commands"]
+  },
+  "earthquake_commands": {
+    "enabled": true,
+    "log_level": "INFO",
+    "admin_roles": ["Admin", "Moderator"],
+    "user_roles": ["Member"],
+    "dependencies": ["module_connector"]
+  },
+  "discord_bot": {
+    "log_level": "INFO",
+    "command_prefix": "!",
+    "description": "Discord Bot for Testing",
+    "intents": ["guilds", "guild_messages", "message_content"],
+    "connection_retry": {
+      "max_attempts": 5,
+      "backoff_factor": 1.5,
+      "initial_delay": 2
+    },
+    "vm_environment": {
+      "startup_delay": 30,
+      "health_check_interval": 600
+    }
+  }
+} 
