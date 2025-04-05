@@ -139,21 +139,25 @@ logger.info("使用 %s 作為命令前綴初始化機器人", PREFIX)
 async def on_ready():
     """當機器人登入Discord時執行"""
     logger.info(f'機器人 {bot.user.name} 已連接到 Discord!')
+    # 在登入後加載擴展
+    await load_extensions()
 
-# 加載指令模組
-for filename in os.listdir('./cmds'):
-    # 僅加載 Python 文件且非 __init__.py
-    if filename.endswith('.py') and not filename.startswith('__'):
-        try:
-            bot.load_extension(f'cmds.{filename[:-3]}')
-            logger.info(f'成功加載指令模組: {filename}')
-        except Exception as e:
-            logger.error(f'加載指令模組 {filename} 時發生錯誤: {str(e)}')
+# 定義異步加載模組函數
+async def load_extensions():
+    for filename in os.listdir('./cmds'):
+        # 僅加載 Python 文件且非 __init__.py
+        if filename.endswith('.py') and not filename.startswith('__'):
+            try:
+                await bot.load_extension(f'cmds.{filename[:-3]}')
+                logger.info(f'成功加載指令模組: {filename}')
+            except Exception as e:
+                logger.error(f'加載指令模組 {filename} 時發生錯誤: {str(e)}')
 
-# 運行機器人
+# 主程序
 if __name__ == '__main__':
     try:
         logger.info("正在啟動 Discord 機器人...")
+        # 使用asyncio運行機器人
         bot.run(TOKEN)
     except Exception as e:
         logger.critical(f"啟動機器人時發生錯誤: {str(e)}")

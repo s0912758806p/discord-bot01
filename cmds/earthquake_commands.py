@@ -175,6 +175,11 @@ class EarthquakeCommands(commands.Cog):
         Args:
             earthquake_module: 地震監測模組實例
         """
+        # 檢查是否是相同實例，避免重複設置
+        if self.earthquake is earthquake_module and self.earthquake is not None:
+            logger.debug(f"地震監測模組引用相同，跳過重複設置 (ID: {id(earthquake_module)})")
+            return self
+            
         # 添加Docker環境診斷信息
         try:
             import platform

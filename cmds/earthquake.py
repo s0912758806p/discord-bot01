@@ -46,35 +46,152 @@ class Earthquake(Cog_Extension):
             import platform
             import os
             logger.info("=========== 地震模組初始化開始 ===========")
-            logger.info(f"系統: {platform.system()} {platform.release()}")
+            logger.info(f"系統: {platform.system()} {platform.version()}")
             logger.info(f"Python: {platform.python_version()}")
             logger.info(f"Discord.py: {discord.__version__}")
             logger.info(f"主機名: {platform.node()}")
-            logger.info(f"Docker環境: {os.environ.get('DOCKER_ENVIRONMENT', 'false')}")
-            logger.info(f"容器ID: {os.environ.get('HOSTNAME', 'unknown')}")
             
-            # 檢查可用記憶體
+            # 檢測是否在Docker中運行
+            in_docker = False
+            docker_id = "unknown"
+            try:
+                with open('/proc/self/cgroup', 'r') as f:
+                    in_docker = any('docker' in line for line in f)
+                    for line in f:
+                        if 'docker' in line:
+                            docker_id = line.strip().split('/')[-1][:12]
+                            break
+            except (FileNotFoundError, PermissionError):
+                pass
+                
+            logger.info(f"Docker環境: {in_docker}")
+            logger.info(f"容器ID: {docker_id}")
+            
+            # 記憶體資訊
             try:
                 import psutil
-                mem = psutil.virtual_memory()
-                logger.info(f"記憶體: 總計 {mem.total/1048576:.1f}MB, 可用 {mem.available/1048576:.1f}MB ({mem.percent}%使用中)")
-                logger.info(f"CPU使用率: {psutil.cpu_percent(interval=0.1)}%")
-            except ImportError:
-                logger.info("psutil未安裝，跳過系統資源診斷")
+                memory = psutil.virtual_memory()
+                logger.info(f"記憶體: 總計 {memory.total/(1024*1024):.1f}MB, "
+                           f"可用 {memory.available/(1024*1024):.1f}MB "
+                           f"({memory.percent}%使用中)")
+                
+                # CPU使用率
+                cpu_percent = psutil.cpu_percent(interval=0.1)
+                logger.info(f"CPU使用率: {cpu_percent}%")
+            except Exception as e:
+                logger.warning(f"無法獲取系統資源信息: {e}")
         except Exception as e:
             logger.error(f"環境診斷錯誤: {e}")
             
         # 設置基本屬性
         self.bot = bot
         
-        # 初始化狀態標記
-        self._initialize_status_flags()
+        # 緩存和狀態屬性
+        self.session = None
+        self.cached_message = None
+        self.cached_embed = None
+        self.limited_functionality = False
+        self.memory_cache = {}  # 初始化記憶體緩存
+        self.data_dir = 'data'  # 添加數據目錄屬性
+        self.api_calls_total = 0  # 添加API調用計數器
+        self.last_etag = None  # 添加 last_etag 屬性
+        self.last_modified = None  # 添加 last_modified 屬性
+        self.last_data_hash = None  # 添加數據哈希值屬性
+        self.cache_ttl = 60  # 緩存過期時間，單位秒
+        self.consecutive_304 = 0  # 連續收到 304 響應的次數
+        self.max_consecutive_304 = 5  # 最大連續 304 計數，用於調整輪詢間隔
         
-        # 載入配置
+        # 輪詢與重試設定
+        self.polling_interval = 30  # 默認輪詢間隔 30 秒
+        self.min_polling_interval = 15  # 最小輪詢間隔
+        self.max_polling_interval = 300  # 最大輪詢間隔
+        self.backoff_factor = 1.5  # 輪詢間隔遞增係數
+        
+        # 紀錄運行狀態
+        self.last_poll_time = datetime.datetime.now()
+        self.last_poll_success = False
+        self.processing_events = set()  # 正在處理的地震事件ID
+        
+        # 初始化狀態標記
+        self.polling_active = False  # 輪詢是否啟動
+        self.basic_init_complete = False  # 基本初始化完成
+        self.full_init_complete = False  # 完整初始化完成
+        self.api_ready = False  # API就緒
+        self.task_started = False  # 任務已啟動
+        self.session_created = False  # 會話已創建
+        self.commands_linked = False  # 命令模組已連結
+        
+        # 設置配置信息
+        self.config_dir = os.path.join('config', 'earthquake')
+        self.config_file = os.path.join(self.config_dir, 'settings.json')
+        self.cache_file = os.path.join(self.config_dir, 'cache.json')
+        self.data_file = os.path.join(self.config_dir, 'earthquake_data.json')
+        self.id_file = os.path.join(self.config_dir, 'earthquake_ids.json')
+        self.processed_files = os.path.join(self.config_dir, 'processed.json')
+        self.last_sent_times = {}  # 紀錄最近發送的訊息時間
+        
+        # API相關設定
+        self.api_key = os.getenv('EARTHQUAKE_API_KEY', '')
+        self.api_url = os.getenv('EARTHQUAKE_API_URL', 'https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0015-001')
+        self.cwb_api_key = self.api_key
+        self.cwb_api_url = self.api_url  # 確保 cwb_api_url 屬性存在
+        
+        # 訊息發送設定
+        try:
+            earthquake_channel_value = os.getenv('EARTHQUAKE_CHANNEL', '0').strip()
+            self.earthquake_channel = int(earthquake_channel_value)
+            logger.info(f"地震頻道ID: {self.earthquake_channel}")
+        except ValueError as e:
+            logger.error(f"解析地震頻道ID出錯: {e}")
+            self.earthquake_channel = 0
+        
+        self.max_quake_age_hours = int(os.getenv('EARTHQUAKE_MAX_AGE_HOURS', '24'))
+        self.broadcast_today = os.getenv('EARTHQUAKE_BROADCAST_TODAY', 'True').lower() == 'true'
+        
+        # 運行統計
+        self.stats = {
+            'api_calls': 0,
+            'processed_events': 0,
+            'skipped_calls': 0,
+            'error_count': 0,
+            'not_modified_count': 0,
+            'cache_hits': 0,
+            'start_time': datetime.datetime.now(),
+        }
+        
+        # 確保配置目錄存在
+        if not os.path.exists(self.config_dir):
+            os.makedirs(self.config_dir, exist_ok=True)
+        
+        # 所有數據
+        self.earthquake_data = []
+        self.tracked_ids = []
+        self.processed_ids = {}
+        
+        # API效能監控
+        self.api_calls_skipped = 0
+        self.start_time = time.time()
+        self.consecutive_errors = 0
+        self.last_api_error_time = None
+        
+        # 地震廣播相關屬性
+        self.broadcast_today_earthquakes = True
+        self.last_earthquakes = set()
+        self.sent_earthquakes = set()
+        self.earthquake_timestamps = {}
+        
+        # 初始化載入配置
         self._load_config()
         
         # 設置API端點
         self._setup_api_endpoints()
+        
+        # API 相關緩存設定
+        self.state_file = os.path.join(self.data_dir, 'earthquake_state.json')
+        
+        # 添加 API 文件讀寫屬性
+        self.api_etags = {}
+        self.api_last_modified = {}
         
         logger.info("地震模組基本屬性初始化完成")
         
@@ -214,6 +331,13 @@ class Earthquake(Cog_Extension):
                     self.polling_active = True
                     logger.info("✅ 地震模組完整初始化成功！")
                     
+                    # 設置模組連接器中的ready狀態
+                    if hasattr(self.bot, '_module_connector'):
+                        module_connector = self.bot._module_connector
+                        if module_connector and hasattr(module_connector, 'set_module_ready'):
+                            module_connector.set_module_ready('Earthquake', True)
+                            logger.info("✅ 已在模組連接器中設置地震模組為就緒狀態")
+                    
                     # 發送成功初始化的機器人狀態更新
                     try:
                         activity = discord.Activity(
@@ -249,6 +373,13 @@ class Earthquake(Cog_Extension):
                 logger.critical("⚠️ 所有初始化嘗試都失敗，設置最小功能集")
                 self._setup_minimal_functionality()
                 
+                # 在模組連接器中設置為非就緒狀態
+                if hasattr(self.bot, '_module_connector'):
+                    module_connector = self.bot._module_connector
+                    if module_connector and hasattr(module_connector, 'set_module_ready'):
+                        module_connector.set_module_ready('Earthquake', False, error="初始化失敗")
+                        logger.info("已在模組連接器中設置地震模組為非就緒狀態")
+                
                 # 發送初始化失敗的機器人狀態更新
                 try:
                     activity = discord.Activity(
@@ -262,6 +393,13 @@ class Earthquake(Cog_Extension):
         except Exception as e:
             logger.error(f"延遲初始化過程中發生錯誤: {e}", exc_info=True)
             self._setup_minimal_functionality()
+            
+            # 在模組連接器中設置為非就緒狀態
+            if hasattr(self.bot, '_module_connector'):
+                module_connector = self.bot._module_connector
+                if module_connector and hasattr(module_connector, 'set_module_ready'):
+                    module_connector.set_module_ready('Earthquake', False, error=str(e))
+                    logger.info("已在模組連接器中設置地震模組為非就緒狀態（初始化錯誤）")
     
     async def _load_earthquake_state(self):
         """載入地震狀態"""
@@ -387,14 +525,25 @@ class Earthquake(Cog_Extension):
     async def _setup_commands_module(self):
         """設置指令模組引用"""
         try:
+            # 檢查是否已經成功連接，避免重複設置
+            if self.commands_linked:
+                logger.debug("地震指令模組引用已存在，跳過重複設置")
+                return True
+                
             # 列出所有已加載的cogs
             loaded_cogs = list(self.bot.cogs.keys())
-            logger.info(f"已加載的cogs: {', '.join(loaded_cogs)}")
+            logger.debug(f"已加載的cogs: {', '.join(loaded_cogs)}")
             
             # 獲取EarthquakeCommands實例
             commands_cog = self.bot.get_cog('EarthquakeCommands')
             
             if commands_cog:
+                # 檢查指令模組是否已經設置了正確的地震模組引用
+                if getattr(commands_cog, 'earthquake', None) is self:
+                    logger.debug("地震指令模組引用已正確設置，無需重複設置")
+                    self.commands_linked = True
+                    return True
+                    
                 # 設置地震模組引用
                 commands_cog.set_earthquake_module(self)
                 
@@ -412,6 +561,12 @@ class Earthquake(Cog_Extension):
                 # 嘗試從所有cogs中查找可能的指令模組
                 for cog_name, cog in self.bot.cogs.items():
                     if hasattr(cog, 'set_earthquake_module'):
+                        # 檢查是否已經設置了引用
+                        if getattr(cog, 'earthquake', None) is self:
+                            logger.debug(f"模組 {cog_name} 引用已正確設置，無需重複設置")
+                            self.commands_linked = True
+                            break
+                            
                         logger.info(f"找到可能的指令模組: {cog_name}")
                         cog.set_earthquake_module(self)
                         if getattr(cog, 'earthquake', None) is self:
@@ -491,6 +646,14 @@ class Earthquake(Cog_Extension):
             self.task_started = False
             self.session_created = False
             self.api_ready = False
+            
+            # 在模組連接器中設置為非就緒狀態 (重啟中)
+            if hasattr(self.bot, '_module_connector'):
+                module_connector = self.bot._module_connector
+                if module_connector and hasattr(module_connector, 'set_module_ready'):
+                    module_connector.set_module_ready('Earthquake', False, error="正在重啟")
+                    logger.info("已在模組連接器中設置地震模組為非就緒狀態（重啟中）")
+                    
         except Exception as e:
             logger.error(f"清理資源時出錯: {e}")
             
@@ -516,18 +679,42 @@ class Earthquake(Cog_Extension):
             if success_tasks and success_commands:
                 self.full_init_complete = True
                 self.polling_active = True
+                
+                # 在模組連接器中設置為就緒狀態
+                if hasattr(self.bot, '_module_connector'):
+                    module_connector = self.bot._module_connector
+                    if module_connector and hasattr(module_connector, 'set_module_ready'):
+                        module_connector.set_module_ready('Earthquake', True)
+                        logger.info("✅ 已在模組連接器中重新設置地震模組為就緒狀態")
+                        
                 logger.info("✅ 地震模組重新啟動成功！")
                 return True
             else:
                 logger.warning(f"部分重啟失敗 - 任務: {success_tasks}, 命令: {success_commands}")
                 self.full_init_complete = False
                 self.polling_active = False
+                
+                # 在模組連接器中設置為非就緒狀態
+                if hasattr(self.bot, '_module_connector'):
+                    module_connector = self.bot._module_connector
+                    if module_connector and hasattr(module_connector, 'set_module_ready'):
+                        module_connector.set_module_ready('Earthquake', False, error="部分重啟失敗")
+                        logger.info("已在模組連接器中設置地震模組為非就緒狀態（部分重啟失敗）")
+                        
                 return False
                 
         except Exception as e:
             logger.error(f"重新啟動地震模組失敗: {e}", exc_info=True)
             # 設置最小功能集
             self._setup_minimal_functionality()
+            
+            # 在模組連接器中設置為非就緒狀態
+            if hasattr(self.bot, '_module_connector'):
+                module_connector = self.bot._module_connector
+                if module_connector and hasattr(module_connector, 'set_module_ready'):
+                    module_connector.set_module_ready('Earthquake', False, error=str(e))
+                    logger.info("已在模組連接器中設置地震模組為非就緒狀態（重啟錯誤）")
+                    
             return False
 
     def _setup_commands(self):
