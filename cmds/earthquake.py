@@ -16,6 +16,9 @@ from core.cache import cache
 from dotenv import load_dotenv
 import dateutil.parser
 
+# 引入指令模組
+from cmds.earthquake_commands import EarthquakeCommands
+
 # 載入環境變數
 load_dotenv()
 
@@ -37,7 +40,7 @@ class Earthquake(Cog_Extension):
         self.session = aiohttp.ClientSession()
         
         # 發送鎖，防止重複發送
-        self.sending_lock = asyncio.Lock()
+        self.sending_lock = False
         
         # 地震API設定
         self.cwb_api_url = self._safe_get_env("EARTHQUAKE_API_URL", "https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0015-001")
@@ -121,8 +124,61 @@ class Earthquake(Cog_Extension):
         # 發送監測任務標記和日志清理任務
         self.processing_events = set()  # 正在處理的事件ID
         
-        logger.info("地震監測模組已初始化")
+        # 設置消息冷卻時間 (5分鐘 = 300秒)
+        self.message_cooldown = self._safe_get_env("EARTHQUAKE_MESSAGE_COOLDOWN", "300", int)
         
+        # 設置USGS API URL
+        self.usgs_api_url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
+        
+        # 確保先創建這些屬性
+        self.last_poll_time = datetime.datetime.now()
+        self.polling_active = True
+        
+        # 初始化指令模組
+        self.setup_commands()
+        
+        # 創建一個異步任務，在所有模組加載完成後設置引用
+        self.bot.loop.create_task(self._setup_commands_later())
+        
+        logger.info("地震監測模組已初始化")
+    
+    def setup_commands(self):
+        """初始化並設置指令模組"""
+        try:
+            # 確保初始化時創建這些屬性，以便命令能正常工作
+            # 創建輪詢時間記錄
+            self.last_poll_time = datetime.datetime.now()
+            
+            # 標記輪詢狀態為活動中
+            self.polling_active = True
+            
+            # 初始化統計計數器
+            if not hasattr(self, 'total_api_calls'):
+                self.total_api_calls = 0
+            if not hasattr(self, 'not_modified_responses'):
+                self.not_modified_responses = 0
+            if not hasattr(self, 'cache_hits'):
+                self.cache_hits = 0
+            if not hasattr(self, 'consecutive_304_count'):
+                self.consecutive_304_count = 0
+            
+            # 獲取已經由discord.py加載的EarthquakeCommands實例
+            # 這個實例是由earthquake_commands.py的setup函數創建並添加到bot中的
+            commands_cog = self.bot.get_cog('EarthquakeCommands')
+            
+            if commands_cog:
+                # 如果找到了cog實例，設置地震模組引用
+                commands_cog.set_earthquake_module(self)
+                logger.info("已連結地震指令模組到地震監測模組")
+            else:
+                # 如果找不到cog實例，可能是指令模組尚未加載
+                logger.warning("找不到地震指令模組，請確保earthquake_commands.py已被正確加載")
+                
+        except Exception as e:
+            logger.error(f"設置地震指令模組時出錯: {e}", exc_info=True)
+        
+        logger.info("地震指令模組設置完成")
+    
     # 輪詢間隔調整邏輯
     def _adjust_polling_interval(self, success=True, no_change=False):
         """
@@ -316,68 +372,45 @@ class Earthquake(Cog_Extension):
         logger.info(f"已從配置文件載入 {len(self.last_earthquakes)} 個地震ID記錄")
         
     async def cog_load(self):
-        """當此 Cog 被加載時啟動監測任務和日誌清理任務"""
-        # 初始化會話
-        if not self.session:
-            self.session = aiohttp.ClientSession()
-            logger.debug("已創建 aiohttp.ClientSession 用於 API 請求")
+        """當模組被Discord.py加載後調用"""
+        logger.info("地震監測模組正在加載...")
         
-        # 啟動地震監測任務
-        if not self.task_started:
-            # 這邊使用 start() 而不是 start() 是因為要確保沒有任何例外發生
-            try:
-                self.earthquake_monitoring.start()
-                self.task_started = True
-                logger.info("地震監測任務已啟動 (間隔: 每6秒)")
-            except RuntimeError as e:
-                if "Task is already launched" in str(e):
-                    logger.warning("地震監測任務已經在運行中，跳過重複啟動")
-                    self.task_started = True
-                else:
-                    logger.error(f"啟動地震監測任務失敗: {e}")
-        else:
-            logger.debug("地震監測任務已經被標記為啟動，跳過")
-            
-        # 啟動日誌清理任務
+        # 確保初始化狀態屬性
+        self.last_poll_time = datetime.datetime.now()
+        self.polling_active = True
+        
+        # 統計計數器
+        self.total_api_calls = 0
+        self.not_modified_responses = 0
+        self.cache_hits = 0
+        self.consecutive_304_count = 0
+        
+        # 啟動監測任務
+        self._start_earthquake_monitoring()
+        
+        # 設置指令模組的引用
+        # 這將在所有Cog都加載完成後執行
+        asyncio.create_task(self._setup_command_reference_later())
+        
+        logger.info("地震監測模組加載完成")
+
+    async def _setup_command_reference_later(self):
+        """在所有Cog加載完成後設置指令模組的引用"""
+        # 等待所有模組加載完成
+        await asyncio.sleep(3)
+        
+        # 再次嘗試設置地震模組引用
         try:
-            self.cleanup_logs.start()
-            logger.info("日誌清理任務已啟動 (間隔: 每3天)")
-        except RuntimeError as e:
-            if "Task is already launched" in str(e):
-                logger.warning("日誌清理任務已經在運行中，跳過重複啟動")
+            commands_cog = self.bot.get_cog('EarthquakeCommands')
+            if commands_cog:
+                # 設置地震模組引用
+                commands_cog.set_earthquake_module(self)
+                logger.info("成功延遲設置地震指令模組引用")
             else:
-                logger.error(f"啟動日誌清理任務失敗: {e}")
-                
-        # 記錄初始化完成
-        logger.info(f"地震監測任務初始化完成，API KEY: {'已設置' if self.cwb_api_key else '未設置'}")
-        
-        # 如果 API KEY 未設置，記錄警告
-        if not self.cwb_api_key:
-            logger.warning("沒有設置中央氣象局 API KEY，可能會導致請求限制")
-        
-        # 創建連接池並設置合適的連接參數
-        conn_limit = 10  # 最大連接數
-        timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_connect=10, sock_read=10)
-        
-        # 使用 TCP_NODELAY 來減少延遲
-        tcp_connector = aiohttp.TCPConnector(
-            limit=conn_limit,
-            enable_cleanup_closed=True,
-            force_close=True,
-            ssl=False  # 如果需要HTTPS，則設為None或適當的SSL上下文
-        )
-        
-        self.session = aiohttp.ClientSession(
-            connector=tcp_connector,
-            timeout=timeout,
-            raise_for_status=False,  # 不自動拋出HTTP錯誤，使我們可以更好地處理它們
-            headers={
-                'User-Agent': 'Discord-Earthquake-Bot/1.0'
-            }
-        )
-        
-        logger.info("地震監測模組已加載，設置為最大 %d 個連接", conn_limit)
-        
+                logger.warning("延遲設置地震指令模組引用失敗，找不到EarthquakeCommands模組")
+        except Exception as e:
+            logger.error(f"延遲設置地震指令模組引用時出錯: {e}", exc_info=True)
+    
     async def cog_unload(self):
         """卸載模組時調用"""
         # 先取消任務
@@ -414,6 +447,9 @@ class Earthquake(Cog_Extension):
     async def earthquake_monitoring(self):
         """高效率地震監測：自適應輪詢間隔、條件請求和多層緩存"""
         try:
+            # 更新最後輪詢時間
+            self.last_poll_time = datetime.datetime.now()
+            
             # 記錄任務執行時間，用於調試重複執行問題
             exec_id = f"eq_mon_{int(time.time())}"
             logger.debug(f"開始執行地震監測任務 (執行ID: {exec_id}, 當前輪詢間隔: {self.polling_interval}秒)")
@@ -1288,575 +1324,6 @@ class Earthquake(Cog_Extension):
         # 實際的URL格式可能需要根據中央氣象局網站調整
         return f"https://www.cwb.gov.tw/V8/C/E/EQ/EQ_list.html"
 
-    @commands.command(name="手動地震測試全體")
-    @commands.has_permissions(administrator=True)
-    async def manual_earthquake_test_everyone(self, ctx):
-        """測試地震廣播功能（包含全體通知）"""
-        # 避免重複執行
-        cmd_key = f"manual_test_{ctx.author.id}"
-        if cmd_key in self.processing_events:
-            await ctx.send("⚠️ 指令處理中，請稍候再試")
-            return
-            
-        self.processing_events.add(cmd_key)
-        try:
-            test_id = f"TEST-{int(time.time())}"
-            
-            # 創建測試資料
-            test_earthquake = {
-                'earthquakeNo': test_id,
-                'reportContent': '這是一則測試地震警報，請勿驚慌',
-                'originTime': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'magnitudeValue': 4.5,
-                'location': '測試位置',
-                'depth': {
-                    'value': 10.0,
-                    'unit': 'km'
-                },
-                'coordinate': {
-                    'longitude': 121.5,
-                    'latitude': 25.0
-                },
-                'source': '測試資料'
-            }
-            
-            await self.send_earthquake_alert(test_earthquake, mention_everyone=True)
-            # 不要將測試數據添加到實際地震ID列表中
-            await ctx.send(f"地震警報測試完成! 測試ID: {test_id}")
-            logger.info(f"管理員 {ctx.author.name} 執行了全體通知地震警報測試，ID: {test_id}")
-        except Exception as e:
-            await ctx.send(f"❌ 地震警報測試失敗: {str(e)}")
-            logger.error(f"地震警報測試失敗: {e}", exc_info=True)
-        finally:
-            # 確保完成後移除處理標記
-            self.processing_events.discard(cmd_key)
-
-    @commands.command(name="今日地震")
-    async def today_earthquake(self, ctx):
-        """顯示今日最新地震資訊"""
-        # 避免重複執行
-        cmd_key = f"today_eq_{ctx.author.id}"
-        if cmd_key in self.processing_events:
-            await ctx.send("⚠️ 指令處理中，請稍候再試")
-            return
-            
-        self.processing_events.add(cmd_key)
-        response_msg = await ctx.send("正在查詢今日最新地震資訊...")
-        
-        try:
-            # 獲取今日日期
-            today = datetime.datetime.now().date()
-            
-            # 獲取最新地震資料
-            earthquakes = await self.fetch_earthquake_data()
-            
-            if not earthquakes:
-                await response_msg.edit(content="❌ 無法獲取地震資料")
-                self.processing_events.discard(cmd_key)
-                return
-            
-            # 過濾出今日地震
-            today_earthquakes = []
-            for eq in earthquakes:
-                try:
-                    # 使用幫助方法獲取和解析時間
-                    time_str = self.get_earthquake_time_field(eq)
-                    if not time_str:
-                        continue
-                    
-                    eq_time = self.parse_earthquake_time(time_str)
-                    if not eq_time:
-                        continue
-                        
-                    if eq_time.date() == today:
-                        today_earthquakes.append(eq)
-                except Exception as e:
-                    logger.error(f"解析地震時間出錯: {e}")
-                    continue
-            
-            # 按時間排序 (使用幫助方法)
-            try:
-                def get_earthquake_time_for_sorting(earthquake):
-                    time_str = self.get_earthquake_time_field(earthquake)
-                    eq_time = self.parse_earthquake_time(time_str)
-                    return eq_time if eq_time else datetime.datetime(1970, 1, 1)
-                
-                today_earthquakes.sort(key=get_earthquake_time_for_sorting, reverse=True)
-            except Exception as e:
-                logger.error(f"排序地震時間出錯: {e}")
-            
-            if not today_earthquakes:
-                await response_msg.edit(content="🔍 今日尚無地震資料")
-                self.processing_events.discard(cmd_key)
-                return
-            
-            # 獲取最新的一個地震
-            latest_eq = today_earthquakes[0]
-            
-            # 獲取地震ID (嘗試不同的字段名稱)
-            eq_id = latest_eq.get('earthquakeNo', latest_eq.get('EarthquakeNo', latest_eq.get('identifier', '未知ID')))
-            
-            # 發送地震警報
-            await self.send_earthquake_alert(latest_eq)
-            
-            await response_msg.edit(content=f"✅ 已發送今日最新地震資訊 (ID: {eq_id})")
-            logger.info(f"使用者 {ctx.author.name} 使用今日地震命令查詢，發送了ID為 {eq_id} 的地震資訊")
-            
-        except Exception as e:
-            await response_msg.edit(content=f"❌ 查詢今日地震失敗: {str(e)}")
-            logger.error(f"查詢今日地震失敗: {e}", exc_info=True)
-        finally:
-            # 確保完成後移除處理標記
-            self.processing_events.discard(cmd_key)
-    
-    @commands.command(name="今日地震廣播")
-    @commands.has_permissions(administrator=True)
-    async def today_earthquake_broadcast(self, ctx):
-        """廣播今日最新地震資訊（包含全體通知）"""
-        # 避免重複執行
-        cmd_key = f"today_eq_broadcast_{ctx.author.id}"
-        if cmd_key in self.processing_events:
-            await ctx.send("⚠️ 指令處理中，請稍候再試")
-            return
-            
-        self.processing_events.add(cmd_key)
-        response_msg = await ctx.send("正在獲取今日最新地震資訊，準備廣播...")
-        
-        try:
-            # 獲取今日日期
-            today = datetime.datetime.now().date()
-            
-            # 獲取最新地震資料
-            earthquakes = await self.fetch_earthquake_data()
-            
-            if not earthquakes:
-                await response_msg.edit(content="❌ 無法獲取地震資料")
-                self.processing_events.discard(cmd_key)
-                return
-            
-            # 過濾出今日地震
-            today_earthquakes = []
-            for eq in earthquakes:
-                try:
-                    # 使用幫助方法獲取時間字段
-                    time_str = self.get_earthquake_time_field(eq)
-                    if not time_str:
-                        logger.warning(f"無法找到地震時間字段，跳過: {eq.get('earthquakeNo', eq.get('EarthquakeNo', eq.get('identifier', 'unknown')))}")
-                        continue
-                    
-                    # 使用幫助方法解析時間
-                    eq_time = self.parse_earthquake_time(time_str)
-                    if not eq_time:
-                        continue
-                        
-                    if eq_time.date() == today:
-                        today_earthquakes.append(eq)
-                except Exception as e:
-                    logger.error(f"解析地震時間出錯: {e}")
-                    continue
-            
-            if not today_earthquakes:
-                await response_msg.edit(content="🔍 今日尚無地震資料")
-                self.processing_events.discard(cmd_key)
-                return
-            
-            # 按時間排序 (使用幫助方法)
-            try:
-                def get_earthquake_time_for_sorting(earthquake):
-                    time_str = self.get_earthquake_time_field(earthquake)
-                    eq_time = self.parse_earthquake_time(time_str)
-                    return eq_time if eq_time else datetime.datetime(1970, 1, 1)
-                
-                today_earthquakes.sort(key=get_earthquake_time_for_sorting, reverse=True)
-            except Exception as e:
-                logger.error(f"排序地震資料出錯: {e}")
-            
-            # 獲取最新的一個地震
-            latest_eq = today_earthquakes[0]
-            
-            # 獲取地震ID (嘗試不同的字段名稱)
-            eq_id = latest_eq.get('earthquakeNo', latest_eq.get('EarthquakeNo', latest_eq.get('identifier', '未知ID')))
-            
-            # 發送地震警報，包含全體通知
-            await self.send_earthquake_alert(latest_eq, mention_everyone=True)
-            
-            await response_msg.edit(content=f"✅ 已廣播今日最新地震資訊 (ID: {eq_id})")
-            logger.info(f"管理員 {ctx.author.name} 使用今日地震廣播命令，發送了ID為 {eq_id} 的全體通知地震資訊")
-            
-        except Exception as e:
-            await response_msg.edit(content=f"❌ 廣播今日地震失敗: {str(e)}")
-            logger.error(f"廣播今日地震失敗: {e}", exc_info=True)
-        finally:
-            # 確保完成後移除處理標記
-            self.processing_events.discard(cmd_key)
-
-    @commands.command(name="立即地震監測")
-    @commands.has_permissions(administrator=True)
-    async def immediate_earthquake_check(self, ctx):
-        """立即執行一次地震監測並發送最新資訊 (僅限管理員)"""
-        # 避免重複執行
-        cmd_key = f"immediate_check_{ctx.author.id}"
-        if cmd_key in self.processing_events:
-            await ctx.send("⚠️ 指令處理中，請稍候再試")
-            return
-            
-        self.processing_events.add(cmd_key)
-        response_msg = await ctx.send("🔍 正在立即執行地震監測...")
-        
-        try:
-            # 避免頻率限制檢查，直接獲取最新地震資料
-            earthquakes = await self.fetch_earthquake_data()
-            
-            if not earthquakes:
-                await response_msg.edit(content="❌ 無法獲取地震資料")
-                self.processing_events.discard(cmd_key)
-                return
-                
-            current_time = datetime.datetime.now()
-            today = current_time.date()
-            
-            # 過濾今日地震
-            today_earthquakes = []
-            for eq in earthquakes:
-                try:
-                    time_str = eq.get('originTime', eq.get('time', ''))
-                    if not time_str:
-                        continue
-                    
-                    eq_time = datetime.datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
-                    if eq_time.date() == today:
-                        today_earthquakes.append(eq)
-                except Exception as e:
-                    logger.error(f"解析地震時間出錯: {e}")
-                    continue
-            
-            if not today_earthquakes:
-                await response_msg.edit(content="🔍 今日尚無地震資料")
-                self.processing_events.discard(cmd_key)
-                return
-                
-            # 按時間排序
-            today_earthquakes.sort(
-                key=lambda eq: datetime.datetime.strptime(
-                    eq.get('originTime', eq.get('time', '1970-01-01 00:00:00')), 
-                    '%Y-%m-%d %H:%M:%S'
-                ),
-                reverse=True
-            )
-            
-            # 獲取最新的地震
-            latest_eq = today_earthquakes[0]
-            
-            # 取得地震ID
-            eq_id = latest_eq.get('earthquakeNo', latest_eq.get('identifier', '未知ID'))
-            
-            # 檢查是否已經發送過
-            already_sent = eq_id in self.sent_earthquakes
-            status_msg = f"ID: {eq_id}, 發生時間: {latest_eq.get('originTime', latest_eq.get('time', '未知'))}\n"
-            status_msg += f"已處理狀態: {'✅ 已發送過' if already_sent else '❌ 未發送過'}\n"
-            
-            # 無論是否已發送過，都發送一次
-            await self.send_earthquake_alert(latest_eq, mention_everyone=False)
-            
-            if not already_sent:
-                # 將新地震加入已處理集合
-                self.last_earthquakes.add(eq_id)
-                self.sent_earthquakes.add(eq_id)
-                self.earthquake_timestamps[eq_id] = current_time.timestamp()
-                
-                # 保存已發送的地震ID
-                self._save_sent_earthquake_ids()
-                self._save_earthquake_state()
-                
-                status_msg += "該地震現已加入已處理記錄。"
-                
-            await response_msg.edit(content=f"✅ 立即監測完成！\n{status_msg}")
-            logger.info(f"管理員 {ctx.author.name} 執行了立即地震監測，發送了ID為 {eq_id} 的地震資訊")
-            
-        except Exception as e:
-            await response_msg.edit(content=f"❌ 立即監測失敗: {str(e)}")
-            logger.error(f"立即監測失敗: {e}", exc_info=True)
-        finally:
-            # 確保完成後移除處理標記
-            self.processing_events.discard(cmd_key)
-
-    @commands.command(name="測試地震API")
-    @commands.has_permissions(administrator=True)
-    async def test_earthquake_api(self, ctx):
-        """測試地震API連接和數據解析"""
-        # 避免重複執行
-        cmd_key = f"test_api_{ctx.author.id}"
-        if cmd_key in self.processing_events:
-            await ctx.send("⚠️ 指令處理中，請稍候再試")
-            return
-            
-        self.processing_events.add(cmd_key)
-        response_msg = await ctx.send("🔍 正在測試地震API連接...")
-        
-        try:
-            # 獲取API URL
-            api_url = self.cwb_api_url
-            message = f"使用API端點: {api_url}\n"
-            
-            # 發送請求
-            headers = {
-                "Authorization": self.cwb_api_key,
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            }
-            
-            async with self.session.get(api_url, headers=headers) as response:
-                message += f"HTTP狀態碼: {response.status}\n"
-                
-                if response.status != 200:
-                    message += f"❌ API返回錯誤: {response.status}\n"
-                    error_text = await response.text()
-                    message += f"錯誤內容: {error_text[:500]}...\n"
-                    await response_msg.edit(content=message)
-                    self.processing_events.discard(cmd_key)
-                    return
-                
-                # 解析JSON回應
-                try:
-                    data = await response.json()
-                    message += "✅ 成功解析JSON回應\n"
-                    
-                    # 檢查API回應結構
-                    if data.get("success"):
-                        message += "✅ API返回success=true\n"
-                    else:
-                        message += "❌ API返回success=false\n"
-                        
-                    if "records" in data:
-                        message += "✅ 找到records字段\n"
-                        message += f"records中的字段: {', '.join(data['records'].keys())}\n"
-                        
-                        records = data["records"]
-                        
-                        # 檢查地震數據字段 (同時檢查大小寫)
-                        earthquake_field = None
-                        if "earthquake" in records:
-                            earthquake_field = "earthquake"
-                            message += "✅ 找到 earthquake 字段 (小寫)\n"
-                        elif "Earthquake" in records:
-                            earthquake_field = "Earthquake"
-                            message += "✅ 找到 Earthquake 字段 (大寫)\n"
-                        
-                        if earthquake_field:
-                            earthquakes = records[earthquake_field]
-                            count = len(earthquakes)
-                            message += f"✅ 找到{count}個地震記錄\n"
-                            
-                            # 檢查最新的地震
-                            if count > 0:
-                                latest = earthquakes[0]
-                                # 嘗試不同的ID字段名稱
-                                eq_no = latest.get("earthquakeNo", latest.get("EarthquakeNo", "未知"))
-                                message += f"最新地震ID: {eq_no}\n"
-                    else:
-                        message += "❌ 未找到records字段\n"
-                        
-                except ValueError as e:
-                    message += f"❌ JSON解析錯誤: {e}\n"
-                
-            # 使用我們修改後的函數獲取地震數據
-            message += "\n--- 使用 fetch_earthquake_data 測試 ---\n"
-            earthquakes = await self.fetch_earthquake_data()
-            if earthquakes:
-                message += f"✅ 成功獲取{len(earthquakes)}筆地震資料\n"
-                
-                # 過濾今日地震並顯示
-                current_time = datetime.datetime.now()
-                today = current_time.date()
-                today_earthquakes = []
-                
-                # 處理各種可能的日期字段格式
-                for eq in earthquakes:
-                    try:
-                        # 嘗試不同的時間字段
-                        time_str = eq.get('originTime', eq.get('OriginTime', eq.get('time', '')))
-                        if not time_str:
-                            continue
-                        
-                        eq_time = datetime.datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
-                        if eq_time.date() == today:
-                            today_earthquakes.append(eq)
-                    except Exception as e:
-                        message += f"解析地震時間出錯: {e}\n"
-                        continue
-                
-                message += f"今日地震數: {len(today_earthquakes)}\n"
-                
-                # 顯示今日最新地震
-                if today_earthquakes:
-                    # 按時間排序
-                    try:
-                        today_earthquakes.sort(
-                            key=lambda eq: datetime.datetime.strptime(
-                                eq.get('originTime', eq.get('OriginTime', eq.get('time', '1970-01-01 00:00:00'))),
-                                '%Y-%m-%d %H:%M:%S'
-                            ),
-                            reverse=True
-                        )
-                        
-                        latest = today_earthquakes[0]
-                        # 嘗試不同的ID字段
-                        eq_id = latest.get('earthquakeNo', latest.get('EarthquakeNo', '未知ID'))
-                        # 嘗試不同的時間字段
-                        origin_time = latest.get('originTime', latest.get('OriginTime', '未知時間'))
-                        message += f"今日最新地震: ID={eq_id}, 時間={origin_time}\n"
-                    except Exception as e:
-                        message += f"排序地震數據時出錯: {e}\n"
-                
-            else:
-                message += f"❌ fetch_earthquake_data無法獲取地震資料\n"
-                
-            # 發送測試結果
-            await response_msg.edit(content=message)
-        
-        except Exception as e:
-            await response_msg.edit(content=f"❌ API測試失敗: {str(e)}")
-            logger.error(f"API測試失敗: {e}", exc_info=True)
-        finally:
-            # 確保完成後移除處理標記
-            self.processing_events.discard(cmd_key)
-
-    @commands.command(name="檢查API資訊")
-    @commands.has_permissions(administrator=True)
-    async def check_api_details(self, ctx):
-        """詳細檢查API連接和回應結構"""
-        # 避免重複執行
-        cmd_key = f"check_api_{ctx.author.id}"
-        if cmd_key in self.processing_events:
-            await ctx.send("⚠️ 指令處理中，請稍候再試")
-            return
-            
-        self.processing_events.add(cmd_key)
-        response_msg = await ctx.send("🔍 正在詳細檢查API連接和回應結構...")
-        
-        try:
-            # 獲取API URL和Key
-            api_url = self.cwb_api_url
-            api_key = self.cwb_api_key
-            
-            # 構建詳細信息字符串
-            details = f"**API基本信息**\n"
-            details += f"- URL: `{api_url}`\n"
-            details += f"- API Key: `{api_key[:5]}...`\n\n"
-            
-            # 發送API請求
-            headers = {
-                "Authorization": api_key,
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            }
-            
-            # 更新狀態消息
-            await response_msg.edit(content="發送API請求中...")
-            
-            async with self.session.get(api_url, headers=headers) as response:
-                # 更新HTTP狀態碼
-                details += f"**HTTP響應**\n"
-                details += f"- 狀態碼: {response.status}\n"
-                
-                # 檢查內容類型
-                content_type = response.headers.get('Content-Type', '未知')
-                details += f"- 內容類型: {content_type}\n"
-                
-                # 更新狀態消息
-                await response_msg.edit(content=f"{details}\n正在解析響應數據...")
-                
-                if response.status != 200:
-                    error_text = await response.text()
-                    details += f"- 錯誤響應: ```{error_text[:300]}...```\n"
-                    await response_msg.edit(content=details)
-                    self.processing_events.discard(cmd_key)
-                    return
-                
-                # 解析JSON響應
-                try:
-                    data = await response.json()
-                    
-                    # 更新狀態消息
-                    await response_msg.edit(content=f"{details}\n解析JSON成功，正在分析數據結構...")
-                    
-                    # 檢查API響應結構
-                    details += "\n**API響應結構**\n"
-                    if "success" in data:
-                        details += f"- Success: {data['success']}\n"
-                    
-                    if "records" in data:
-                        records = data["records"]
-                        details += f"- Records字段: 存在\n"
-                        
-                        # 列出records中的所有字段
-                        record_fields = list(records.keys())
-                        details += f"- Records包含字段: {', '.join(record_fields)}\n"
-                        
-                        # 檢查earthquake字段
-                        if "earthquake" in records:
-                            earthquakes = records["earthquake"]
-                            details += f"- 地震記錄數: {len(earthquakes)}\n"
-                        else:
-                            details += f"- 無地震記錄\n"
-                    else:
-                        details += f"- Records字段: 不存在\n"
-                
-                except ValueError as e:
-                    details += f"\n**解析錯誤**\n- JSON解析失敗: {str(e)}\n"
-            
-            # 發送完整的詳細信息
-            await response_msg.edit(content=details)
-            
-        except Exception as e:
-            await response_msg.edit(content=f"❌ API詳情檢查失敗: {str(e)}")
-            logger.error(f"API詳情檢查失敗: {e}", exc_info=True)
-        finally:
-            # 確保完成後移除處理標記
-            self.processing_events.discard(cmd_key)
-
-    @commands.command(name="設置地震廣播")
-    @commands.has_permissions(administrator=True)
-    async def set_earthquake_broadcast(self, ctx, enabled: bool = None):
-        """設置是否自動廣播今日地震 (需要管理員權限)
-        
-        參數:
-            enabled: 是否啟用 (True/False)，不提供則顯示當前狀態
-        """
-        # 避免重複執行
-        cmd_key = f"set_broadcast_{ctx.author.id}"
-        if cmd_key in self.processing_events:
-            await ctx.send("⚠️ 指令處理中，請稍候再試")
-            return
-            
-        self.processing_events.add(cmd_key)
-        
-        try:
-            if enabled is None:
-                # 顯示當前狀態
-                status = "啟用" if self.broadcast_today_earthquakes else "停用"
-                await ctx.send(f"🔊 自動廣播今日地震功能目前為: **{status}**")
-                self.processing_events.discard(cmd_key)
-                return
-                
-            # 更新設置
-            self.broadcast_today_earthquakes = enabled
-            status = "啟用" if enabled else "停用"
-            
-            # 更新環境變數 (僅記憶體中，不持久化到.env文件)
-            os.environ['EARTHQUAKE_BROADCAST_TODAY'] = str(enabled)
-            
-            # 更新配置文件
-            self.config['EARTHQUAKE_BROADCAST_TODAY'] = str(enabled)
-            save_config('setting.json', self.config)
-            
-            await ctx.send(f"✅ 已{status}自動廣播今日地震功能")
-            logger.info(f"管理員 {ctx.author.name} 已{status}自動廣播今日地震功能")
-        except Exception as e:
-            await ctx.send(f"❌ 設置地震廣播失敗: {str(e)}")
-            logger.error(f"設置地震廣播失敗: {e}", exc_info=True)
-        finally:
-            # 確保完成後移除處理標記
-            self.processing_events.discard(cmd_key)
-
     @tasks.loop(hours=72)  # 每三天運行一次
     async def cleanup_logs(self):
         """定期清理舊日誌文件，保留當天的日誌"""
@@ -1958,6 +1425,86 @@ class Earthquake(Cog_Extension):
                 return 0x8B0000  # 深紅色 - 極強地震
         except (ValueError, TypeError):
             return 0xFF0000  # 默認紅色
+
+    def _start_earthquake_monitoring(self):
+        """啟動地震監測任務"""
+        # 初始化會話
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+            logger.debug("已創建 aiohttp.ClientSession 用於 API 請求")
+        
+        # 啟動地震監測任務
+        if not self.task_started:
+            # 這邊使用 start() 而不是 start() 是因為要確保沒有任何例外發生
+            try:
+                self.earthquake_monitoring.start()
+                self.task_started = True
+                logger.info("地震監測任務已啟動 (間隔: 每6秒)")
+            except RuntimeError as e:
+                if "Task is already launched" in str(e):
+                    logger.warning("地震監測任務已經在運行中，跳過重複啟動")
+                    self.task_started = True
+                else:
+                    logger.error(f"啟動地震監測任務失敗: {e}")
+        else:
+            logger.debug("地震監測任務已經被標記為啟動，跳過")
+            
+        # 啟動日誌清理任務
+        try:
+            self.cleanup_logs.start()
+            logger.info("日誌清理任務已啟動 (間隔: 每3天)")
+        except RuntimeError as e:
+            if "Task is already launched" in str(e):
+                logger.warning("日誌清理任務已經在運行中，跳過重複啟動")
+            else:
+                logger.error(f"啟動日誌清理任務失敗: {e}")
+            
+        # 記錄初始化完成
+        logger.info(f"地震監測任務初始化完成，API KEY: {'已設置' if self.cwb_api_key else '未設置'}")
+        
+        # 如果 API KEY 未設置，記錄警告
+        if not self.cwb_api_key:
+            logger.warning("沒有設置中央氣象局 API KEY，可能會導致請求限制")
+        
+        # 創建連接池並設置合適的連接參數
+        conn_limit = 10  # 最大連接數
+        timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_connect=10, sock_read=10)
+        
+        # 使用 TCP_NODELAY 來減少延遲
+        tcp_connector = aiohttp.TCPConnector(
+            limit=conn_limit,
+            enable_cleanup_closed=True,
+            force_close=True,
+            ssl=False  # 如果需要HTTPS，則設為None或適當的SSL上下文
+        )
+        
+        self.session = aiohttp.ClientSession(
+            connector=tcp_connector,
+            timeout=timeout,
+            raise_for_status=False,  # 不自動拋出HTTP錯誤，使我們可以更好地處理它們
+            headers={
+                'User-Agent': 'Discord-Earthquake-Bot/1.0'
+            }
+        )
+        
+        logger.info("地震監測模組已加載，設置為最大 %d 個連接", conn_limit)
+
+    async def _setup_commands_later(self):
+        """延遲設置指令模組引用"""
+        try:
+            # 等待bot準備好
+            await self.bot.wait_until_ready()
+            # 再等待額外的時間，確保所有cog都已加載
+            await asyncio.sleep(3)
+            
+            commands_cog = self.bot.get_cog('EarthquakeCommands')
+            if commands_cog:
+                commands_cog.set_earthquake_module(self)
+                logger.info("成功延遲設置地震指令模組引用")
+            else:
+                logger.error("延遲設置地震指令模組引用失敗，找不到EarthquakeCommands模組")
+        except Exception as e:
+            logger.error(f"延遲設置地震指令模組引用時出錯: {e}", exc_info=True)
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Earthquake(bot)) 
