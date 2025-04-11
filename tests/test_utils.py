@@ -1,100 +1,70 @@
 """
-測試工具模組
-提供單元測試和整合測試中共用的工具函數和類
+測試工具模塊，提供測試所需的通用功能
 """
 import os
 import sys
 import json
 import asyncio
-import logging
 import unittest
+from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch, AsyncMock
+from typing import Dict, Any, List, Optional, Callable, Awaitable
 
-# 添加專案根目錄到 Python 路徑
+# 添加專案根目錄到Python路徑
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, PROJECT_ROOT)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-# 設置測試記錄器
-logger = logging.getLogger('test_utils')
+# 測試數據目錄
+TEST_DATA_DIR = os.path.join(os.path.dirname(__file__), 'test_data')
 
 class AsyncTestCase(unittest.TestCase):
-    """用於異步測試的測試用例基類"""
+    """用於測試異步代碼的測試用例基類"""
     
     def setUp(self):
         """設置測試環境"""
-        # 設置事件循環
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         
-        # 設置防止測試超時
-        self.MAX_WAIT = 3  # 最大等待秒數
-        
     def tearDown(self):
         """清理測試環境"""
-        # 關閉事件循環
         self.loop.close()
+        asyncio.set_event_loop(None)
         
     def run_async(self, coro):
-        """運行異步協程並等待結果"""
+        """運行異步協程並返回結果"""
         return self.loop.run_until_complete(coro)
-    
+        
     def create_mock_channel(self, channel_id="123456789"):
-        """創建模擬的 Discord 頻道"""
-        mock_channel = MagicMock()
-        mock_channel.id = channel_id
-        mock_channel.send = AsyncMock()
-        return mock_channel
-    
+        """創建模擬的Discord頻道"""
+        channel = MagicMock()
+        channel.id = channel_id
+        channel.send = AsyncMock()
+        return channel
+        
     def create_mock_guild(self, guild_id="987654321"):
-        """創建模擬的 Discord 伺服器"""
-        mock_guild = MagicMock()
-        mock_guild.id = guild_id
-        mock_guild.name = "TestGuild"
-        return mock_guild
-    
+        """創建模擬的Discord伺服器"""
+        guild = MagicMock()
+        guild.id = guild_id
+        guild.name = "Test Guild"
+        return guild
+        
     def create_mock_message(self, content="test message", author_id="123456789"):
-        """創建模擬的 Discord 訊息"""
-        mock_message = MagicMock()
-        mock_message.content = content
-        mock_message.author = MagicMock()
-        mock_message.author.id = author_id
-        mock_message.author.bot = False
-        mock_message.channel = self.create_mock_channel()
-        mock_message.guild = self.create_mock_guild()
-        mock_message.add_reaction = AsyncMock()
-        mock_message.delete = AsyncMock()
-        return mock_message
+        """創建模擬的Discord消息"""
+        message = MagicMock()
+        message.content = content
+        
+        author = MagicMock()
+        author.id = author_id
+        author.name = "Test User"
+        message.author = author
+        
+        message.add_reaction = AsyncMock()
+        message.delete = AsyncMock()
+        return message
 
 class MockData:
     """用於生成測試數據的類"""
-    
-    @staticmethod
-    def generate_earthquake_data(count=5):
-        """生成模擬地震數據"""
-        now = datetime.now()
-        data = []
-        
-        for i in range(count):
-            days_ago = i * 0.5  # 每隔半天一筆資料
-            time = (now - timedelta(days=days_ago)).isoformat()
-            
-            # 產生隨機震級 (3.0 到 6.5 之間)
-            magnitude = 3.0 + (i % 7) / 2
-            
-            data.append({
-                "id": f"eq{i+1}",
-                "time": time,
-                "magnitude": magnitude,
-                "depth": 10 + i * 2,
-                "location": f"測試位置 {i+1}",
-                "description": f"這是第 {i+1} 筆測試地震資料",
-                "latitude": 23.5 + (i * 0.1),
-                "longitude": 121.0 + (i * 0.1),
-                "intensity": i % 6
-            })
-        
-        return data
     
     @staticmethod
     def generate_config_data():
@@ -103,8 +73,6 @@ class MockData:
             "api_key": "test_api_key",
             "watch_channels": ["123456789", "234567890"],
             "alert_channels": ["345678901", "456789012"],
-            "earthquake_data": {},
-            "last_sent_times": {},
             "min_magnitude": 4.0,
             "check_interval": 60
         }

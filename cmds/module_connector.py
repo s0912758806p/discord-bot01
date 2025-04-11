@@ -61,15 +61,6 @@ class ModuleConnector:
             logger.info(f"發現Cog: {cog_name}")
             self.register_module(cog_name, cog)
             
-        # 特別檢查地震監測模組和地震指令模組
-        earthquake_module = self.bot.get_cog('Earthquake')
-        earthquake_commands = self.bot.get_cog('EarthquakeCommands')
-        
-        # 檢查這兩個模組是否都存在
-        if earthquake_module and earthquake_commands:
-            logger.info("發現地震監測模組和地震指令模組，嘗試連接")
-            self.connect_modules('Earthquake', 'EarthquakeCommands')
-            
     def register_module(self, module_name: str, module_instance: Any) -> bool:
         """註冊一個模組
         
@@ -201,7 +192,7 @@ class ModuleConnector:
             raise
             
     def connect_modules(self, source_module: str, target_module: str) -> bool:
-        """連接兩個模組，建立依賴關係
+        """連接兩個模組，建立它們之間的通信
         
         Args:
             source_module: 源模組名稱
@@ -210,7 +201,7 @@ class ModuleConnector:
         Returns:
             bool: 連接是否成功
         """
-        # 檢查模組是否已註冊
+        # 檢查兩個模組是否已註冊
         if source_module not in self.modules:
             logger.warning(f"嘗試連接未註冊的源模組: {source_module}")
             return False
@@ -219,81 +210,62 @@ class ModuleConnector:
             logger.warning(f"嘗試連接未註冊的目標模組: {target_module}")
             return False
             
-        # 更新依賴關係
+        # 獲取模組實例
+        source = self.modules[source_module]
+        target = self.modules[target_module]
+        
+        # 記錄依賴關係
         if target_module not in self.module_states[source_module]['dependencies']:
             self.module_states[source_module]['dependencies'].append(target_module)
             
         if source_module not in self.module_states[target_module]['dependents']:
             self.module_states[target_module]['dependents'].append(source_module)
             
-        logger.info(f"模組 {source_module} 和 {target_module} 已連接")
-        
-        # 如果是地震監測模組和地震指令模組，則嘗試設置引用
-        if source_module == 'Earthquake' and target_module == 'EarthquakeCommands':
-            earthquake_module = self.modules[source_module]
-            commands_module = self.modules[target_module]
-            
-            if hasattr(commands_module, 'set_earthquake_module'):
-                logger.info("嘗試設置地震指令模組引用")
-                commands_module.set_earthquake_module(earthquake_module)
-                logger.info("✅ 通過模組連接器成功設置地震指令模組引用")
-                
-                # 檢查地震監測模組是否有重啟方法，確保兩者正確連接
-                if hasattr(earthquake_module, 'restart_earthquake_module'):
-                    logger.info("確認地震監測模組具有重啟方法")
-                
-        # 或者反向
-        elif source_module == 'EarthquakeCommands' and target_module == 'Earthquake':
-            earthquake_module = self.modules[target_module]
-            commands_module = self.modules[source_module]
-            
-            if hasattr(commands_module, 'set_earthquake_module'):
-                logger.info("嘗試設置地震指令模組引用")
-                commands_module.set_earthquake_module(earthquake_module)
-                logger.info("✅ 通過模組連接器成功設置地震指令模組引用")
-        
+        logger.info(f"成功連接模組: {source_module} -> {target_module}")
         return True
         
     async def _monitor_module_states(self):
-        """監控模組狀態的任務"""
-        while True:
+        """持續監控模組狀態"""
+        await self.bot.wait_until_ready()
+        
+        while not self.bot.is_closed():
+            try:
+                # 檢查所有模組
+                for module_name, module in self.modules.items():
+                    # 檢查模組是否還存在
+                    if module_name not in self.bot.cogs:
+                        logger.warning(f"模組已不存在於bot.cogs中: {module_name}")
+                        continue
+                        
+                    # 執行特定模組的檢查
+                    await self._check_specific_module(module_name, module)
+                
+                # 檢查新模組
+                self._check_new_modules()
+                    
+            except Exception as e:
+                logger.error(f"監控模組狀態時出錯: {e}")
+                
             await asyncio.sleep(60)  # 每分鐘檢查一次
             
-            for module_name, state in self.module_states.items():
-                # 檢查模組是否仍然存在
-                if module_name not in self.bot.cogs:
-                    logger.warning(f"模組 {module_name} 不再存在，標記為非就緒")
-                    state['ready'] = False
-                    state['error'] = "模組不再存在"
-                else:
-                    # 檢查地震監測模組的特殊狀態
-                    if module_name == 'Earthquake':
-                        module = self.modules[module_name]
-                        # 檢查輪詢狀態
-                        if hasattr(module, 'polling_active') and not module.polling_active:
-                            logger.warning(f"地震監測模組輪詢非活動狀態，嘗試重啟")
-                            # 嘗試重啟
-                            if hasattr(module, 'restart_earthquake_module'):
-                                try:
-                                    await module.restart_earthquake_module()
-                                    logger.info("✅ 地震監測模組重啟成功")
-                                except Exception as e:
-                                    logger.error(f"地震監測模組重啟失敗: {e}")
-                                    
-            # 重新檢查並連接地震相關模組
-            earthquake_module = self.bot.get_cog('Earthquake')
-            earthquake_commands = self.bot.get_cog('EarthquakeCommands')
+    async def _check_specific_module(self, module_name: str, module: Any):
+        """檢查特定模組的狀態
+        
+        Args:
+            module_name: 模組名稱
+            module: 模組實例
+        """
+        pass  # 留空供以後擴展
             
-            if earthquake_module and earthquake_commands:
-                # 檢查指令模組是否已設置地震模組引用
-                if (hasattr(earthquake_commands, 'earthquake') and 
-                    earthquake_commands.earthquake is None):
-                    logger.warning("發現地震指令模組未設置地震模組引用，嘗試重新連接")
-                    earthquake_commands.set_earthquake_module(earthquake_module)
-                    logger.info("✅ 通過監控任務重新設置地震指令模組引用")
-                    
+    def _check_new_modules(self):
+        """檢查是否有新的模組被加載"""
+        for cog_name, cog in self.bot.cogs.items():
+            if cog_name not in self.modules:
+                logger.info(f"發現新模組: {cog_name}，進行註冊")
+                self.register_module(cog_name, cog)
+        
     def get_module_state(self, module_name: str) -> Dict[str, Any]:
-        """獲取模組狀態
+        """獲取模組狀態信息
         
         Args:
             module_name: 模組名稱
@@ -304,19 +276,20 @@ class ModuleConnector:
         if module_name not in self.module_states:
             return {
                 'exists': False,
-                'registered': False,
-                'ready': False,
-                'error': "模組未註冊"
+                'message': f"模組 {module_name} 未註冊"
             }
             
         state = self.module_states[module_name].copy()
-        state['exists'] = module_name in self.bot.cogs
-        state['registered'] = True
+        state['exists'] = True
+        
+        # 添加一些額外的有用信息
+        state['registered_time'] = state['registered_at'].strftime('%Y-%m-%d %H:%M:%S')
+        state['last_check_time'] = state['last_status_check'].strftime('%Y-%m-%d %H:%M:%S')
         
         return state
         
     def get_all_module_states(self) -> Dict[str, Dict[str, Any]]:
-        """獲取所有模組的狀態
+        """獲取所有模組的狀態信息
         
         Returns:
             Dict[str, Dict[str, Any]]: 所有模組的狀態信息
@@ -328,7 +301,7 @@ class ModuleConnector:
         return result
         
     async def reconnect_modules(self, source_module: str, target_module: str) -> bool:
-        """重新連接兩個模組，用於錯誤恢復
+        """重新連接兩個模組
         
         Args:
             source_module: 源模組名稱
@@ -337,15 +310,25 @@ class ModuleConnector:
         Returns:
             bool: 重連是否成功
         """
-        # 先刪除舊連接
+        logger.info(f"嘗試重新連接模組: {source_module} -> {target_module}")
+        
+        # 先檢查模組是否還存在
+        if source_module not in self.modules or target_module not in self.modules:
+            logger.warning(f"重連失敗: 模組不存在 ({source_module} 或 {target_module})")
+            return False
+            
+        # 清除舊的連接
         if target_module in self.module_states[source_module]['dependencies']:
             self.module_states[source_module]['dependencies'].remove(target_module)
             
         if source_module in self.module_states[target_module]['dependents']:
             self.module_states[target_module]['dependents'].remove(source_module)
             
-        # 然後重新建立連接
-        return self.connect_modules(source_module, target_module)
+        # 建立新的連接
+        success = self.connect_modules(source_module, target_module)
+        
+        logger.info(f"模組重連{'成功' if success else '失敗'}: {source_module} -> {target_module}")
+        return success
 
 async def setup(bot):
     """設置模組連接器
@@ -354,6 +337,4 @@ async def setup(bot):
         bot: Discord Bot實例
     """
     connector = ModuleConnector(bot)
-    bot._module_connector = connector
-    logger.info("模組連接器已註冊到機器人實例")
-    return None  # 明確返回 None 
+    await bot.add_cog(connector) 

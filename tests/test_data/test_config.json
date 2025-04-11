@@ -1,15 +1,8 @@
 {
-    "api_key": "new_test_api_key",
-    "watch_channels": [
-        "111222333"
-    ],
-    "alert_channels": [
-        "444555666"
-    ],
-    "earthquake_data": {
-        "test": "data"
-    },
-    "last_sent_times": {
-        "test": "time"
-    }
+  "api_key": "new_test_api_key",
+  "watch_channels": ["111222333"],
+  "alert_channels": ["444555666"],
+  "last_sent_times": {
+    "test": "time"
+  }
 }

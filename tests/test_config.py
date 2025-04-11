@@ -35,7 +35,6 @@ def setup_test_environment() -> None:
     os.environ['TESTING'] = 'true'
     os.environ['VM_ENVIRONMENT'] = 'true'
     os.environ['DISCORD_HTTP_TIMEOUT'] = '10'
-    os.environ['EARTHQUAKE_API_KEY'] = 'test_api_key'
     
     logger.info("測試環境設置完成")
 
@@ -71,25 +70,6 @@ def load_test_data(filename: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         logger.error(f"測試數據文件 {filename} 不是有效的JSON")
         return {}
-
-def create_earthquake_config(
-    api_key: Optional[str] = "test_api_key",
-    watch_channels: Optional[list] = None,
-    alert_channels: Optional[list] = None
-) -> Dict[str, Any]:
-    """創建地震模組測試配置"""
-    if watch_channels is None:
-        watch_channels = ["123456789"]
-    if alert_channels is None:
-        alert_channels = ["987654321"]
-    
-    return {
-        "api_key": api_key,
-        "watch_channels": watch_channels,
-        "alert_channels": alert_channels,
-        "earthquake_data": {},
-        "last_sent_times": {}
-    }
 
 def create_test_data_file(filename: str, data: Dict[str, Any]) -> str:
     """創建測試數據文件

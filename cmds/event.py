@@ -18,14 +18,14 @@ jData = load_config('setting.json')
 class Event(Cog_Extension):
     # 類常量
     PUQIAN: List[str] = [
-        "assets/img/puqian/large_fierce.png",
-        "assets/img/puqian/normal_fierce.png",
-        "assets/img/puqian/small_fierce.png",
-        "assets/img/puqian/large_lucky.png",
-        "assets/img/puqian/medium_lucky.png",
-        "assets/img/puqian/normal_lucky.png",
-        "assets/img/puqian/small_lucky.png",
-        "assets/img/puqian/super_large_lucky.png"
+        "../assets/img/puqian/large_fierce.png",
+        "../assets/img/puqian/normal_fierce.png",
+        "../assets/img/puqian/small_fierce.png",
+        "../assets/img/puqian/large_lucky.png",
+        "../assets/img/puqian/medium_lucky.png",
+        "../assets/img/puqian/normal_lucky.png",
+        "../assets/img/puqian/small_lucky.png",
+        "../assets/img/puqian/super_large_lucky.png"
     ]
     
     BEILAN: List[str] = [

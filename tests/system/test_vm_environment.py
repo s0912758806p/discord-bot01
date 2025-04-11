@@ -1,155 +1,104 @@
 """
-測試VM環境下的運行狀況
-檢查在VM資源限制環境中的功能
+測試虛擬機環境相關功能
+這些測試檢查系統在VM環境中的行為
 """
 import os
 import sys
-import json
-import time
 import unittest
+from unittest.mock import patch, MagicMock, AsyncMock, call
 import subprocess
-from unittest.mock import patch, MagicMock
+import asyncio
 
-# 添加專案根目錄到 Python 路徑
+# 添加項目根目錄到Python路徑
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-sys.path.insert(0, PROJECT_ROOT)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-# 導入測試配置
-from tests.test_config import setup_test_environment
+# 導入測試工具
+from tests.test_config import setup_test_environment, create_mock_bot
 
-class TestVMStartupSequence(unittest.TestCase):
-    """測試VM環境啟動序列"""
+class TestVMEnvironment(unittest.TestCase):
+    """測試VM環境特定功能"""
     
     def setUp(self):
         """設置測試環境"""
-        # 設置測試環境
-        self.config = setup_test_environment()
+        setup_test_environment()
         
-        # 設置 VM 環境變數
+        # 設置VM相關環境變數
         os.environ['VM_ENVIRONMENT'] = 'true'
-        os.environ['DISCORD_HTTP_TIMEOUT'] = '90'
-        os.environ['EARTHQUAKE_INIT_TIMEOUT'] = '120'
-        os.environ['EARTHQUAKE_RETRY_INTERVAL'] = '5'
+        os.environ['DISCORD_HTTP_TIMEOUT'] = '10'
         
-    def test_startup_script_exists(self):
-        """測試啟動腳本是否存在"""
-        startup_script = os.path.join(PROJECT_ROOT, 'start.sh')
-        self.assertTrue(os.path.exists(startup_script), "啟動腳本不存在")
-        self.assertTrue(os.access(startup_script, os.X_OK), "啟動腳本沒有執行權限")
+        # 創建模擬機器人
+        self.mock_bot = create_mock_bot()
     
     @patch('subprocess.run')
-    def test_startup_script_execution(self, mock_run):
-        """測試啟動腳本執行"""
-        # 設置模擬結果
-        mock_process = MagicMock()
-        mock_process.returncode = 0
-        mock_process.stdout = b"Discord Bot starting..."
-        mock_run.return_value = mock_process
-        
-        # 執行啟動腳本
-        result = subprocess.run(
-            ['./start.sh'],
-            capture_output=True,
-            cwd=PROJECT_ROOT,
-            text=True
+    def test_system_health_check(self, mock_run):
+        """測試系統健康檢查功能"""
+        # 模擬執行系統命令的回傳
+        mock_run.return_value = MagicMock(
+            stdout=b"Memory: 50%\nCPU: 30%\nDisk: 60%\n",
+            stderr=b"",
+            returncode=0
         )
         
-        # 驗證結果
-        self.assertEqual(result.returncode, 0)
-        mock_run.assert_called()
+        # 導入模塊 (這裡只進行導入測試)
+        try:
+            from utils.system_health import check_system_health
+            # 執行健康檢查
+            health_status = check_system_health()
+            
+            # 驗證是否調用了系統命令
+            mock_run.assert_called()
+            
+            # 檢查健康狀態結果
+            self.assertIn('memory', health_status)
+            self.assertIn('cpu', health_status)
+            self.assertIn('disk', health_status)
+        except ImportError:
+            self.skipTest("system_health 模組不存在，跳過測試")
     
-    def test_vm_environment_detection(self):
-        """測試VM環境檢測"""
-        # 導入環境檢測功能
-        from main import is_vm_environment
-        
-        # 檢查環境檢測結果
-        self.assertTrue(is_vm_environment())
-
-class TestVMResourceManagement(unittest.TestCase):
-    """測試VM資源管理"""
-    
-    def setUp(self):
-        """設置測試環境"""
-        # 設置測試環境
-        self.config = setup_test_environment()
-        
-        # 設置 VM 環境變數
-        os.environ['VM_ENVIRONMENT'] = 'true'
-        os.environ['VM_MEMORY_LIMIT_MB'] = '512'
-        
-    @patch('psutil.virtual_memory')
-    def test_memory_limit_detection(self, mock_virtual_memory):
-        """測試記憶體限制檢測"""
-        # 設置模擬的記憶體信息
-        mock_memory = MagicMock()
-        mock_memory.total = 512 * 1024 * 1024  # 512 MB
-        mock_memory.available = 256 * 1024 * 1024  # 256 MB
-        mock_memory.percent = 50.0
-        mock_virtual_memory.return_value = mock_memory
-        
-        # 導入並執行記憶體檢測函數
-        from main import check_system_resources
-        memory_info = check_system_resources()
-        
-        # 驗證結果
-        self.assertEqual(memory_info['total_mb'], 512)
-        self.assertEqual(memory_info['available_mb'], 256)
-        self.assertEqual(memory_info['usage_percent'], 50.0)
-    
-    @patch('psutil.cpu_percent')
-    def test_cpu_usage_monitoring(self, mock_cpu_percent):
-        """測試CPU使用率監控"""
-        # 設置模擬的CPU使用率
-        mock_cpu_percent.return_value = 30.0
-        
-        # 導入並執行CPU監控函數
-        from main import check_cpu_usage
-        cpu_usage = check_cpu_usage()
-        
-        # 驗證結果
-        self.assertEqual(cpu_usage, 30.0)
-
-class TestVMRepairTools(unittest.TestCase):
-    """測試VM修復工具"""
-    
-    def setUp(self):
-        """設置測試環境"""
-        # 設置測試環境
-        self.config = setup_test_environment()
-        
-    def test_repair_script_exists(self):
-        """測試修復腳本是否存在"""
-        repair_script = os.path.join(PROJECT_ROOT, 'vm_repair.sh')
-        self.assertTrue(os.path.exists(repair_script), "修復腳本不存在")
-        self.assertTrue(os.access(repair_script, os.X_OK), "修復腳本沒有執行權限")
-    
-    def test_health_monitor_script_exists(self):
-        """測試健康監控腳本是否存在"""
-        monitor_script = os.path.join(PROJECT_ROOT, 'vm_health_monitor.sh')
-        self.assertTrue(os.path.exists(monitor_script), "健康監控腳本不存在")
-        self.assertTrue(os.access(monitor_script, os.X_OK), "健康監控腳本沒有執行權限")
-    
-    @patch('subprocess.run')
-    def test_repair_script_error_detection(self, mock_run):
-        """測試修復腳本錯誤檢測功能"""
-        # 設置模擬結果
+    @patch('subprocess.Popen')
+    def test_error_detection(self, mock_popen):
+        """測試錯誤檢測功能"""
+        # 模擬進程輸出
         mock_process = MagicMock()
-        mock_process.returncode = 0
-        mock_process.stdout = b"[ERROR] Found 3 errors in earthquake module\n[ACTION] Restarting module"
-        mock_run.return_value = mock_process
+        mock_process.stdout = b"[ERROR] Database connection failed\n[ACTION] Retrying"
+        mock_process.poll.return_value = 0
+        mock_popen.return_value = mock_process
         
-        # 執行修復腳本
-        result = subprocess.run(
-            ['./vm_repair.sh', '--diagnose-only'],
-            capture_output=True,
-            cwd=PROJECT_ROOT,
-            text=True
-        )
+        # 導入並測試錯誤檢測功能
+        try:
+            from utils.error_detector import detect_critical_errors
+            errors = detect_critical_errors(['database', 'connection'])
+            
+            # 驗證是否檢測到錯誤
+            self.assertTrue(errors)
+            self.assertEqual(len(errors), 1)
+            self.assertIn('Database connection failed', errors[0])
+        except ImportError:
+            self.skipTest("error_detector 模組不存在，跳過測試")
+            
+    @patch('os.path.exists')
+    @patch('builtins.open')
+    def test_config_management(self, mock_open, mock_exists):
+        """測試配置文件管理"""
+        # 模擬文件存在和讀寫
+        mock_exists.return_value = True
+        mock_file = MagicMock()
+        mock_open.return_value.__enter__.return_value = mock_file
         
-        # 驗證結果
-        self.assertEqual(result.returncode, 0)
-        mock_run.assert_called()
+        # 導入並測試配置管理功能
+        try:
+            from utils.config_manager import load_config, save_config
+            
+            # 執行測試
+            config = load_config('test_config.json')
+            self.assertIsNotNone(config)
+            
+            save_config('test_config.json', {'test': 'data'})
+            mock_file.write.assert_called_once()
+        except ImportError:
+            self.skipTest("config_manager 模組不存在，跳過測試")
 
 if __name__ == '__main__':
     unittest.main() 

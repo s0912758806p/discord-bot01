@@ -33,23 +33,6 @@ def mock_bot():
     return bot
 
 @pytest.fixture
-def mock_earthquake_module():
-    """創建模擬的地震模組"""
-    earthquake = MagicMock()
-    earthquake.name = "Earthquake"
-    earthquake.get_module_status = MagicMock(return_value={
-        "is_initialized": True,
-        "is_fully_initialized": True,
-        "api_connected": True,
-        "last_check_time": "2023-04-05 12:00:00",
-        "watch_channels": ["123456789"],
-        "alert_channels": ["987654321"]
-    })
-    earthquake.restart_earthquake_module = AsyncMock(return_value=(True, "重啟成功"))
-    
-    return earthquake
-
-@pytest.fixture
 def mock_channel():
     """創建模擬的Discord頻道"""
     channel = MagicMock()
