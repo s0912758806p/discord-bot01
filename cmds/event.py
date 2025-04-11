@@ -3,6 +3,8 @@ import random
 import aiohttp
 import datetime
 import asyncio
+import os
+import time
 from typing import Dict, List, Set, Callable, Any, Optional, Union
 from discord.ext import commands
 from core.classes import Cog_Extension
@@ -18,14 +20,14 @@ jData = load_config('setting.json')
 class Event(Cog_Extension):
     # 類常量
     PUQIAN: List[str] = [
-        "../assets/img/puqian/large_fierce.png",
-        "../assets/img/puqian/normal_fierce.png",
-        "../assets/img/puqian/small_fierce.png",
-        "../assets/img/puqian/large_lucky.png",
-        "../assets/img/puqian/medium_lucky.png",
-        "../assets/img/puqian/normal_lucky.png",
-        "../assets/img/puqian/small_lucky.png",
-        "../assets/img/puqian/super_large_lucky.png"
+        "assets/img/puqian/large_fierce.png",
+        "assets/img/puqian/normal_fierce.png",
+        "assets/img/puqian/small_fierce.png",
+        "assets/img/puqian/large_lucky.png",
+        "assets/img/puqian/medium_lucky.png",
+        "assets/img/puqian/normal_lucky.png",
+        "assets/img/puqian/small_lucky.png",
+        "assets/img/puqian/super_large_lucky.png"
     ]
     
     BEILAN: List[str] = [
@@ -116,8 +118,6 @@ class Event(Cog_Extension):
         # 命令處理器映射
         self.command_handlers = {
             '!天氣': self.get_weather,
-            '!抽籤A': self.temple_draw_a,
-            '!抽籤B': self.temple_draw_b,
             '!甜味鬆餅': self.sweet_waffle,
             '!鹹味鬆餅': self.savory_waffle,
             '!炸物鬆餅': self.fried_waffle,
@@ -190,6 +190,11 @@ class Event(Cog_Extension):
         # 記錄所有訊息
         realname = msg.author.nick or msg.author.name
         logger.info(f"{msg.channel.name}-{realname}: {msg.content}")
+        
+        # 檢查是否是使用命令裝飾器註冊的命令，如果是則只由process_commands處理
+        if msg.content == "!抽籤A" or msg.content == "!抽籤B":
+            # 不在這裡處理，讓標準命令系統處理
+            return
         
         # 訓練模式切換
         if msg.content.strip() == "!!啟動":
@@ -289,15 +294,35 @@ class Event(Cog_Extension):
                     logger.info(f"發送抽籤回應: {response}")
                     await msg.channel.send(response)
                     
-                    # 確保文件路徑存在
-                    img_path = self.PUQIAN[rangeNum - 1]
-                    logger.info(f"發送抽籤圖片: {img_path}")
-                    
-                    try:
-                        await msg.channel.send(file=discord.File(img_path))
-                    except Exception as e:
-                        logger.error(f"發送抽籤圖片失敗: {e}, 路徑: {img_path}")
-                        await msg.channel.send(f"抱歉，無法載入圖片。錯誤: {e}")
+                    # 確保文件路徑存在並且是正確的，範圍檢查防止索引錯誤
+                    if rangeNum > 0 and rangeNum <= len(self.PUQIAN):
+                        img_path = self.PUQIAN[rangeNum - 1]
+                        # 檢查圖片路徑是否存在
+                        if not os.path.exists(img_path):
+                            # 記錄原始路徑問題
+                            logger.warning(f"文件不存在於路徑: {img_path}")
+                            # 嘗試從根目錄獲取絕對路徑
+                            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                            absolute_img_path = os.path.join(base_dir, img_path)
+                            logger.info(f"嘗試使用絕對路徑: {absolute_img_path}")
+                            
+                            if os.path.exists(absolute_img_path):
+                                img_path = absolute_img_path
+                            else:
+                                logger.error(f"文件不存在於絕對路徑: {absolute_img_path}")
+                                await msg.channel.send("抱歉，找不到抽籤圖片，請聯繫管理員")
+                                return
+                        
+                        logger.info(f"發送抽籤圖片: {img_path}")
+                        
+                        try:
+                            await msg.channel.send(file=discord.File(img_path))
+                        except Exception as e:
+                            logger.error(f"發送抽籤圖片失敗: {e}, 路徑: {img_path}")
+                            await msg.channel.send(f"抱歉，無法載入圖片。錯誤: {e}")
+                    else:
+                        logger.error(f"抽籤隨機數超出範圍: {rangeNum}, 長度: {len(self.PUQIAN)}")
+                        await msg.channel.send("抱歉，抽籤出錯了")
                 else:
                     response = random.choice(self.BEILAN)
                     logger.info(f"發送貝蘭回應: {response}")
@@ -387,40 +412,50 @@ class Event(Cog_Extension):
             logger.error(f"處理星座運勢時出錯: {e}")
             await msg.channel.send("獲取星座運勢時出錯，請稍後再試")
 
-    @measure_time
-    async def temple_draw_a(self, msg: discord.Message) -> None:
+    @commands.command(name="抽籤A")
+    async def temple_draw_a(self, ctx) -> None:
         """城隍廟抽籤功能 - 優化版"""
         try:
+            # 使用靜態方法來測量執行時間，而不是使用裝飾器
+            start_time = time.time()
+            
             qianRandomNum = random.randint(1, 60)
             
             qianUrl = f'http://www.citygod.tw/fortune.php?ans={qianRandomNum}'
             
-            await msg.channel.send(f'抽中第{qianRandomNum}籤')
+            await ctx.send(f'抽中第{qianRandomNum}籤')
             
             # 優化：直接計算抽籤結果，而不是循環100次
-            # 計算3次成功的概率 (2/3)^3 ≈ 0.296
-            if random.random() < 0.296:  # 約30%的概率獲得籤詩
+            if random.random() < 1:  # 約100%的概率獲得籤詩
                 text = await self.fetch_with_retry(qianUrl)
                 if text:
                     sp = BeautifulSoup(text, 'html.parser')
                     name = sp.select('#wrapper .tittle_two')[0].text
                     qianContent = sp.select('#wrapper div p')[0].text
                     
-                    await msg.channel.send(file=discord.File(jData['QIAN'][qianRandomNum - 1]))
-                    await msg.channel.send(name + '\n' + qianContent)
+                    await ctx.send(file=discord.File(jData['QIAN'][qianRandomNum - 1]))
+                    await ctx.send(name + '\n' + qianContent)
+                    
+            # 記錄執行時間
+            elapsed_time = time.time() - start_time
+            logger.info(f"城隍廟抽籤命令執行時間: {elapsed_time:.3f}秒")
+            
         except Exception as e:
             logger.error(f"城隍廟抽籤時出錯: {e}")
-            await msg.channel.send("抽籤時出錯，請稍後再試")
+            await ctx.send("抽籤時出錯，請稍後再試")
             
-    @measure_time
-    async def temple_draw_b(self, msg: discord.Message) -> None:
+    @commands.command(name="抽籤B")
+    async def temple_draw_b(self, ctx) -> None:
         """淺草寺觀音廟抽籤功能 - 優化版"""
         try:
+            # 使用靜態方法來測量執行時間，而不是使用裝飾器
+            start_time = time.time()
+            
             qianRandomNum = random.randint(1, 100)
             
             qianUrl = f'https://qiangua.temple01.com/qianshi.php?t=fs_akt100&s={qianRandomNum}'
             
-            await msg.channel.send(f'抽中第{qianRandomNum}籤')
+            await ctx.send(f'抽中第{qianRandomNum}籤')
             
             text = await self.fetch_with_retry(qianUrl)
             if text:
@@ -428,12 +463,17 @@ class Event(Cog_Extension):
                 name = '解曰:'
                 qianContent = sp.select('.wrapper .qianshi_view_sidebox_right .fs_lang')[0].text
                 
-                await msg.channel.send(file=discord.File(f"assets/img/JapanQianCao/{qianRandomNum}.jpg"))
-                await msg.channel.send(name)
-                await msg.channel.send(qianContent.strip())
+                await ctx.send(file=discord.File(f"assets/img/JapanQianCao/{qianRandomNum}.jpg"))
+                await ctx.send(name)
+                await ctx.send(qianContent.strip())
+                
+            # 記錄執行時間
+            elapsed_time = time.time() - start_time
+            logger.info(f"淺草寺抽籤命令執行時間: {elapsed_time:.3f}秒")
+            
         except Exception as e:
             logger.error(f"淺草寺抽籤時出錯: {e}")
-            await msg.channel.send("抽籤時出錯，請稍後再試")
+            await ctx.send("抽籤時出錯，請稍後再試")
             
     async def process_default_responses(self, msg: discord.Message) -> None:
         """處理一系列固定回應的命令"""
