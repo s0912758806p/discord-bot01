@@ -21,3 +21,4 @@ pytest-asyncio==0.21.0
 pytest-cov==4.1.0
 websockets==11.0.3
 aiohttp==3.8.5
+os==1.1.1
