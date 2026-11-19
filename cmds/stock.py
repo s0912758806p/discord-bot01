@@ -1,24 +1,10 @@
 import asyncio
-import aiohttp
 import twstock
 from bs4 import BeautifulSoup
 from discord.ext import commands
 from core.classes import Cog_Extension
 
 class Stock(Cog_Extension):
-    def __init__(self, bot):
-        super().__init__(bot)
-        self.session = None
-        
-    async def cog_load(self):
-        # 創建aiohttp會話
-        self.session = aiohttp.ClientSession()
-        
-    async def cog_unload(self):
-        # 關閉aiohttp會話
-        if self.session is not None:
-            await self.session.close()
-            
     @commands.command()
     async def twii(self, ctx):
         """獲取台灣加權指數資訊"""

@@ -71,6 +71,20 @@ class TestBotStartup(unittest.IsolatedAsyncioTestCase):
             await bot.on_ready()
         bot.load_extension.assert_not_awaited()
 
+    async def test_shared_http_session_has_timeout_and_is_closed(self):
+        """各 cog 曾各自開 ClientSession 且沒有 timeout，網站卡住時指令會掛 5 分鐘。"""
+        import main
+        from core.classes import Cog_Extension
+        bot = main.create_bot()
+        bot.load_extension = AsyncMock()
+        await bot.setup_hook()
+        try:
+            self.assertEqual(bot.http_session.timeout.total, main.HTTP_TIMEOUT)
+            self.assertIs(Cog_Extension(bot).session, bot.http_session)
+        finally:
+            await bot.close()
+        self.assertTrue(bot.http_session.closed)
+
     def test_importing_main_does_not_exit_without_token(self):
         """main.py 在 import 時檢查 token 並 sys.exit，導致無法測試。"""
         import importlib
