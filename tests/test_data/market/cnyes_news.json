@@ -1,0 +1,51 @@
+{
+ "items": {
+  "total": 1485,
+  "per_page": 5,
+  "current_page": 1,
+  "last_page": 297,
+  "next_page_url": "/media/api/v1/newslist/category/tw_stock?page=2",
+  "prev_page_url": null,
+  "from": 1,
+  "to": 5,
+  "data": [
+   {
+    "newsId": 6667799,
+    "title": "公股搶進「星」南向！合庫新加坡分行今開業 聚焦聯貸與貿易融資",
+    "publishAt": 1795085532,
+    "categoryId": 827,
+    "categoryName": "台股新聞"
+   },
+   {
+    "newsId": 6667796,
+    "title": "華新越南廠目標一年內完成建廠與設備進駐 以因應AI需求",
+    "publishAt": 1795085224,
+    "categoryId": 827,
+    "categoryName": "台股新聞"
+   },
+   {
+    "newsId": 6667789,
+    "title": "中鴻12月內銷盤價溫和調漲 歐美補庫動能持續、鋼市穩步回溫",
+    "publishAt": 1795084127,
+    "categoryId": 827,
+    "categoryName": "台股新聞"
+   },
+   {
+    "newsId": 6667715,
+    "title": "玉晶光看好與美商3M合作效益添營運動能 資本支出也將增加",
+    "publishAt": 1795082551,
+    "categoryId": 827,
+    "categoryName": "台股新聞"
+   },
+   {
+    "newsId": 6667714,
+    "title": "外資再提款243億元 0050、主動式ETF慘遭倒貨",
+    "publishAt": 1795082021,
+    "categoryId": 829,
+    "categoryName": "台股盤勢"
+   }
+  ]
+ },
+ "message": "成功",
+ "statusCode": 200
+}
