@@ -1,5 +1,5 @@
 #!/bin/bash
-# Discord Bot 智能啟動腳本 - 特別優化地震模組初始化
+# Discord Bot 啟動腳本：檢查環境與依賴後執行 main.py
 # 版本: 1.0.0
 
 # 顏色定義
@@ -18,8 +18,6 @@ echo -e "${BLUE}工作目錄: $ROOT_DIR${NC}"
 echo -e "${BLUE}確保目錄結構...${NC}"
 mkdir -p logs
 mkdir -p data
-mkdir -p config
-mkdir -p tmp
 
 # 檢查是否在Docker環境中
 if [ -f /.dockerenv ] || grep -q docker /proc/1/cgroup 2>/dev/null; then
@@ -85,7 +83,6 @@ if [ ! -f .env ]; then
 # Discord 機器人設置
 DISCORD_TOKEN=
 COMMAND_PREFIX=!
-EARTHQUAKE_CHANNEL=
 
 # 日誌設置
 LOG_LEVEL=INFO
@@ -139,13 +136,6 @@ else
     
     # 記錄錯誤
     echo "Bot異常退出，時間: $(date), 代碼: $EXIT_CODE" >> logs/crash_log.txt
-    
-    # 檢查是否是地震模組錯誤
-    if grep -q "earthquake" logs/discord_*.log 2>/dev/null; then
-        echo -e "${YELLOW}檢測到地震模組相關錯誤，嘗試修復...${NC}"
-        # 創建一個空文件來強制下次啟動重新初始化地震模組
-        touch tmp/force_earthquake_reinit
-    fi
     
     exit $EXIT_CODE
 fi 

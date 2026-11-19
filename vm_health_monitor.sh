@@ -1,6 +1,6 @@
 #!/bin/bash
-# VM健康監控腳本 - 自動檢查地震模組狀態並恢復
-# 可以添加到crontab中，例如: */10 * * * * /path/to/vm_health_monitor.sh >> /var/log/earthquake_monitor.log 2>&1
+# VM健康監控腳本 - 檢查 Discord 機器人容器狀態、記憶體、運行時間與日誌大小，必要時重啟
+# 可以添加到crontab中，例如: */10 * * * * /path/to/vm_health_monitor.sh >> /var/log/discord_bot_monitor.log 2>&1
 
 # 顏色定義
 RED='\033[0;31m'
@@ -42,18 +42,6 @@ if [ $? -ne 0 ] || [ "$CONTAINER_STATUS" != "running" ]; then
     fi
 else
     echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] ${GREEN}容器運行正常${NC}"
-fi
-
-# 檢查地震模組錯誤
-EARTHQUAKE_ERRORS=$(docker logs discord-bot --since 5m 2>&1 | grep -i -E "地震模組|earthquake module" | grep -i -E "error|failed|未就緒" | wc -l)
-if [ $EARTHQUAKE_ERRORS -gt 5 ]; then
-    echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] ${RED}檢測到地震模組錯誤 ($EARTHQUAKE_ERRORS 條)${NC}"
-    echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] ${YELLOW}嘗試重啟容器...${NC}"
-    docker restart discord-bot
-    echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] ${YELLOW}容器已重啟，等待30秒...${NC}"
-    sleep 30
-else
-    echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] ${GREEN}地震模組過去5分鐘無嚴重錯誤${NC}"
 fi
 
 # 檢查容器內存使用

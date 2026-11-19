@@ -87,11 +87,6 @@ class SimplifiedEvent:
             '雙魚座': 'pisces',
         }
         
-    async def get_weather(self, msg):
-        """獲取天氣信息 Mock 實現"""
-        await msg.channel.send("模擬天氣信息: 臺北市, 溫度: 25°C, 晴天")
-        print("✅ 天氣命令已執行")
-        
     async def temple_draw_a(self, msg):
         """城隍廟抽籤功能 Mock 實現"""
         await msg.channel.send("模擬抽中第5籤")
@@ -236,7 +231,6 @@ async def test_commands():
     
     # 測試所有命令處理器
     commands_to_test = {
-        "!天氣": event_cog.get_weather,
         "!抽籤A": event_cog.temple_draw_a,
         "!抽籤B": event_cog.temple_draw_b,
         "!甜味鬆餅": event_cog.sweet_waffle,

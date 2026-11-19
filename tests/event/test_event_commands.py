@@ -39,7 +39,6 @@ async def test_commands():
     
     # Test all command handlers
     commands_to_test = {
-        "!天氣": event_cog.get_weather,
         "!抽籤A": event_cog.temple_draw_a,
         "!抽籤B": event_cog.temple_draw_b,
         "!甜味鬆餅": event_cog.sweet_waffle,
