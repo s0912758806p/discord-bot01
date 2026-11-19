@@ -122,10 +122,11 @@ def parse_cnyes_quotes(data: dict) -> List[GlobalQuote]:
 
 
 def parse_cnyes_news(data: dict) -> List[NewsItem]:
+    """鉅亨新聞列表。略過外包稿（isOutsource=1，例如第三方分析平台的轉載）。"""
     items = []
     for n in (data.get('items') or {}).get('data') or []:
         title, news_id, ts = n.get('title'), n.get('newsId'), n.get('publishAt')
-        if not title or news_id is None or ts is None:
+        if not title or news_id is None or ts is None or n.get('isOutsource'):
             continue
         items.append(NewsItem(
             title=title.strip(),
@@ -136,14 +137,25 @@ def parse_cnyes_news(data: dict) -> List[NewsItem]:
 
 
 def merge_news(groups: Iterable[Sequence[NewsItem]], limit: int) -> List[NewsItem]:
-    """合併多個分類：依標題去重、新到舊排序、取前 limit 則。"""
-    seen, merged = set(), []
+    """合併多個分類：依標題去重（保留較新的），再沿時間軸平均挑 limit 則，新到舊排列。
+
+    API 沒有「重要性」欄位；只取最新幾則會全是清晨的新聞，
+    平均挑選才能涵蓋整段時間窗（前一日盤中、收盤後、美股時段）。
+    """
+    seen, unique = set(), []
     for item in sorted((i for g in groups for i in g), key=lambda i: i.published, reverse=True):
         if item.title in seen:
             continue
         seen.add(item.title)
-        merged.append(item)
-    return merged[:limit]
+        unique.append(item)
+    if limit <= 0:
+        return []
+    if len(unique) <= limit:
+        return unique
+    if limit == 1:
+        return unique[:1]
+    step = (len(unique) - 1) / (limit - 1)
+    return [unique[round(i * step)] for i in range(limit)]
 
 
 def parse_holidays(data: dict) -> Set[dt.date]:
@@ -203,12 +215,26 @@ async def fetch_global_quotes(session: aiohttp.ClientSession,
 
 
 async def fetch_news(session: aiohttp.ClientSession, category: str,
-                     start: dt.datetime, end: dt.datetime, limit: int = 30) -> List[NewsItem]:
-    data = await _get_json(
-        session, CNYES_NEWS_URL.format(category=category),
-        limit=str(limit), startAt=str(int(start.timestamp())), endAt=str(int(end.timestamp())),
-    )
-    return parse_cnyes_news(data)
+                     start: dt.datetime, end: dt.datetime, max_pages: int = 8) -> List[NewsItem]:
+    """抓 [start, end] 內某分類的全部新聞（每頁 30 則、新到舊，最多 max_pages 頁）。
+
+    API 的 startAt/endAt 不完全可靠（實測會回傳更早的稿），所以本地再過濾一次，
+    並在翻到比 start 更早的稿時停止翻頁。
+    """
+    items: List[NewsItem] = []
+    for page in range(1, max_pages + 1):
+        data = await _get_json(
+            session, CNYES_NEWS_URL.format(category=category),
+            limit='30', page=str(page),
+            startAt=str(int(start.timestamp())), endAt=str(int(end.timestamp())),
+        )
+        batch = parse_cnyes_news(data)
+        items += [i for i in batch if start <= i.published <= end]
+        reached_start = any(i.published < start for i in batch)
+        last_page = int((data.get('items') or {}).get('last_page') or 1)
+        if reached_start or not batch or page >= last_page:
+            break
+    return items
 
 
 async def fetch_holidays(session: aiohttp.ClientSession, year: int) -> Set[dt.date]:
