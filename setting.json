@@ -1,37 +1,5 @@
 {
     "CHATROOM01": "",
-    "IMAGE": [
-        "assets/img/blood_river.gif",
-        "assets/img/happy_jump.gif",
-        "assets/img/my_car.gif",
-        "assets/img/rip.gif",
-        "assets/img/yoo_hoo.gif",
-        "assets/img/no_money_no_think.gif",
-        "assets/img/eat_shit.jpg",
-        "assets/img/tahw.jpg",
-        "assets/img/8fangyunji.jpg",
-        "assets/img/qiangjiyaofan.jpg",
-        "assets/img/xiangganrenjia.jpg",
-        "assets/img/bukeneng.jpg",
-        "assets/img/wu2d.jpg",
-        "assets/img/emm.jpg",
-        "assets/img/song.png",
-        "assets/img/xi.png",
-        "assets/img/nizhuyidian.png",
-        "assets/img/yangwang.png",
-        "assets/img/mofashaonv.png",
-        "assets/img/jihezhuangbi.jpg",
-        "assets/img/kuluopai.jpg",
-        "assets/img/C_.png",
-        "assets/img/C_xuong.gif",
-        "assets/img/C_diedao.gif",
-        "assets/img/123321.png",
-        "assets/img/ohhuo.jpg",
-        "assets/img/shima.jpg",
-        "assets/img/shizheyanma.jpg",
-        "assets/img/naqueshi.jpg"
-    ],
-    "URL_IMAGE": [],
     "OFF_WORK": [
         "你需要趕去參加一場與外星人交流的會議，趕快下班！",
         "你的寵物鱷魚丟了，你必須趕回家尋找它，趕快下班！",
@@ -236,9 +204,5 @@
         "assets/img/qian/58.png",
         "assets/img/qian/59.png",
         "assets/img/qian/60.png"
-    ],
-    "CWB_API_KEY": "",
-    "EARTHQUAKE_CHANNEL": "",
-    "LAST_EARTHQUAKES": [],
-    "EARTHQUAKE_TIMESTAMPS": {}
+    ]
 }

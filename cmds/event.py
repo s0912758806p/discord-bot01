@@ -6,6 +6,7 @@ import os
 import time
 from typing import Dict, List, Optional, Tuple
 from discord.ext import commands
+from core.assets import img
 from core.classes import Cog_Extension
 from bs4 import BeautifulSoup
 from opencc import OpenCC
@@ -21,14 +22,14 @@ _S2T = OpenCC('s2t')
 class Event(Cog_Extension):
     # 類常量
     PUQIAN: List[str] = [
-        "assets/img/puqian/large_fierce.png",
-        "assets/img/puqian/normal_fierce.png",
-        "assets/img/puqian/small_fierce.png",
-        "assets/img/puqian/large_lucky.png",
-        "assets/img/puqian/medium_lucky.png",
-        "assets/img/puqian/normal_lucky.png",
-        "assets/img/puqian/small_lucky.png",
-        "assets/img/puqian/super_large_lucky.png"
+        img("puqian/large_fierce.png"),
+        img("puqian/normal_fierce.png"),
+        img("puqian/small_fierce.png"),
+        img("puqian/large_lucky.png"),
+        img("puqian/medium_lucky.png"),
+        img("puqian/normal_lucky.png"),
+        img("puqian/small_lucky.png"),
+        img("puqian/super_large_lucky.png"),
     ]
     
     BEILAN: List[str] = [
@@ -243,7 +244,7 @@ class Event(Cog_Extension):
     async def axi_photo(self, msg: discord.Message) -> None:
         """處理阿希照片命令"""
         await msg.channel.send('叫我幹嘛?')
-        await msg.channel.send(file=discord.File(jData['IMAGE'][15]))
+        await msg.channel.send(file=discord.File(img('xi.png')))
         
     async def horoscope_help(self, msg: discord.Message) -> None:
         """處理星座編號命令"""
@@ -278,21 +279,11 @@ class Event(Cog_Extension):
                     # 確保文件路徑存在並且是正確的，範圍檢查防止索引錯誤
                     if rangeNum > 0 and rangeNum <= len(self.PUQIAN):
                         img_path = self.PUQIAN[rangeNum - 1]
-                        # 檢查圖片路徑是否存在
+                        # img() 已是絕對路徑，與工作目錄無關
                         if not os.path.exists(img_path):
-                            # 記錄原始路徑問題
-                            logger.warning(f"文件不存在於路徑: {img_path}")
-                            # 嘗試從根目錄獲取絕對路徑
-                            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                            absolute_img_path = os.path.join(base_dir, img_path)
-                            logger.info(f"嘗試使用絕對路徑: {absolute_img_path}")
-                            
-                            if os.path.exists(absolute_img_path):
-                                img_path = absolute_img_path
-                            else:
-                                logger.error(f"文件不存在於絕對路徑: {absolute_img_path}")
-                                await msg.channel.send("抱歉，找不到抽籤圖片，請聯繫管理員")
-                                return
+                            logger.error(f"抽籤圖片不存在: {img_path}")
+                            await msg.channel.send("抱歉，找不到抽籤圖片，請聯繫管理員")
+                            return
                         
                         logger.info(f"發送抽籤圖片: {img_path}")
                         
@@ -440,7 +431,7 @@ class Event(Cog_Extension):
                 name = '解曰:'
                 qianContent = sp.select('.wrapper .qianshi_view_sidebox_right .fs_lang')[0].text
                 
-                await ctx.send(file=discord.File(f"assets/img/JapanQianCao/{qianRandomNum}.jpg"))
+                await ctx.send(file=discord.File(img(f"JapanQianCao/{qianRandomNum}.jpg")))
                 await ctx.send(name)
                 await ctx.send(qianContent.strip())
                 
@@ -458,11 +449,10 @@ class Event(Cog_Extension):
         值為 [(kind, payload), ...]，kind 是 'file'（payload 為圖片路徑）或 'text'。
         只存路徑，命中時才開檔；不可在這裡建立 discord.File（會開檔且洩漏 handle）。
         """
-        images = jData.get('IMAGE', [])
         yiyan = jData.get('YIYAN', [])
 
-        def img(i: int) -> List[Tuple[str, str]]:
-            return [('file', images[i])]
+        def pic(filename: str) -> List[Tuple[str, str]]:
+            return [('file', img(filename))]
 
         def yi(i: int) -> List[Tuple[str, str]]:
             return [('file', yiyan[i])]
@@ -479,17 +469,19 @@ class Event(Cog_Extension):
             '我意識到': yi(3), '意識到': yi(3), '突然意識到': yi(3),
             '叫我嗎': yi(4), '找我啊?': yi(4), '叫我嗎?': yi(4),
             # 反應圖片
-            '你不懂啦': img(24), '你們不懂啦': img(24), '哦嚯': img(24), '哦豁': img(24),
-            '是嗎?': img(13), '是這樣嗎?': img(13), '嗯?': img(13),
-            '是嗎': img(25),
-            '是這樣嗎': img(26),
-            '你給我小心點': img(16), '你給我注意點': img(16), '給我小心點': img(16), '給我注意點': img(16),
-            '!魔法少女物理攻擊': img(18),
-            '!過來': img(20), '!欠打': img(20),
-            '!各位集合': img(19), '!集合': img(19),
-            '!快樂阿C': img(21),
-            '!阿C來勢洶洶': img(22),
-            '!阿C滑倒': img(23), '!C->U': img(23),
+            '你不懂啦': pic('123321.png'), '你們不懂啦': pic('123321.png'),
+            '哦嚯': pic('ohhuo.jpg'), '哦豁': pic('ohhuo.jpg'),
+            '是嗎?': pic('emm.jpg'), '是這樣嗎?': pic('emm.jpg'), '嗯?': pic('emm.jpg'),
+            '是嗎': pic('shima.jpg'),
+            '是這樣嗎': pic('shizheyanma.jpg'),
+            '你給我小心點': pic('nizhuyidian.png'), '你給我注意點': pic('nizhuyidian.png'),
+            '給我小心點': pic('nizhuyidian.png'), '給我注意點': pic('nizhuyidian.png'),
+            '!魔法少女物理攻擊': pic('mofashaonv.png'),
+            '!過來': pic('kuluopai.jpg'), '!欠打': pic('kuluopai.jpg'),
+            '!各位集合': pic('jihezhuangbi.jpg'), '!集合': pic('jihezhuangbi.jpg'),
+            '!快樂阿C': pic('C_.png'),
+            '!阿C來勢洶洶': pic('C_xuong.gif'),
+            '!阿C滑倒': pic('C_diedao.gif'), '!C->U': pic('C_diedao.gif'),
             # 文字
             '!哈密嘎': text(':melon:'),
             '血流成河': text('我還真的想看到'),
@@ -505,7 +497,7 @@ class Event(Cog_Extension):
         }
         # MATCHLIST 中的字詞都回同一張圖（不覆蓋上面已定義的觸發詞）
         for word in jData.get('MATCHLIST', []):
-            table.setdefault(word, img(28))
+            table.setdefault(word, pic('naqueshi.jpg'))
         return table
 
     async def process_default_responses(self, msg: discord.Message) -> None:
