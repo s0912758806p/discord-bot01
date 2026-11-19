@@ -1,42 +1,67 @@
+"""
+集中式日誌設定（全專案只在這裡設定一次）。
+
+- handler 掛在 root logger：discord.py 自己的 'discord' logger 與本專案的
+  'discord_bot' logger 都會輸出到同一組 handler，且每行只印一次。
+- 檔案：logs/discord.log，RotatingFileHandler（LOG_MAX_BYTES，預設 5MB；
+  LOG_BACKUP_COUNT，預設 5 份），不會每次啟動多一個檔案。
+- 等級：LOG_LEVEL（預設 INFO）。
+"""
 import logging
 import time
 import functools
 import os
 import asyncio
+from logging.handlers import RotatingFileHandler
 from typing import Callable, Any, Optional, TypeVar, cast
-from datetime import datetime
 
-# 確保日誌目錄存在
-if not os.path.exists('logs'):
-    os.makedirs('logs')
+LOG_DIR = 'logs'
+LOG_FILE = os.path.join(LOG_DIR, 'discord.log')
+_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+_FILE_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
 
-# 配置日誌
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+def _configure_root() -> str:
+    log_level_name = os.environ.get('LOG_LEVEL', 'INFO').upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
+
+    root = logging.getLogger()
+    if getattr(root, '_discord_bot_configured', False):
+        return log_level_name
+    root.setLevel(log_level)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter(_FORMAT))
+    root.addHandler(console_handler)
+
+    os.makedirs(LOG_DIR, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=_int_env('LOG_MAX_BYTES', 5 * 1024 * 1024),
+        backupCount=_int_env('LOG_BACKUP_COUNT', 5),
+        encoding='utf-8',
+    )
+    file_handler.setFormatter(logging.Formatter(_FILE_FORMAT))
+    root.addHandler(file_handler)
+
+    # discord.py 的 DEBUG 會印出每個 gateway 封包，除非明確要求否則壓到 INFO
+    if log_level < logging.INFO:
+        logging.getLogger('discord').setLevel(logging.INFO)
+
+    root._discord_bot_configured = True  # type: ignore[attr-defined]
+    return log_level_name
+
+
+_level_name = _configure_root()
 logger = logging.getLogger('discord_bot')
-
-# 從環境變數獲取日誌級別
-log_level_name = os.environ.get('LOG_LEVEL', 'INFO').upper()
-log_level = getattr(logging, log_level_name, logging.INFO)
-logger.setLevel(log_level)
-
-# 控制台處理器
-console_handler = logging.StreamHandler()
-console_handler.setLevel(log_level)
-console_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(console_format)
-
-# 文件處理器 - 日期格式包含時間
-log_filename = f"logs/discord_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-file_handler = logging.FileHandler(filename=log_filename, encoding='utf-8', mode='a')
-file_handler.setLevel(log_level)
-file_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
-file_handler.setFormatter(file_format)
-
-# 添加處理器
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
-
-# 輸出初始化信息
-logger.info(f"日誌系統初始化完成，級別: {log_level_name}, 文件: {log_filename}")
+logger.info("日誌系統初始化完成，級別: %s, 文件: %s", _level_name, LOG_FILE)
 
 # 測量函數執行時間的裝飾器
 T = TypeVar('T')

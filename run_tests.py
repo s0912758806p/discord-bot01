@@ -22,7 +22,7 @@ def discover_tests(test_type=None):
     """發現並載入測試模組
     
     Args:
-        test_type: 測試類型，可以是'unit', 'integration', 'system'或None(所有測試)
+        test_type: 測試類型，可以是'unit', 'system'或None(所有測試)
         
     Returns:
         TestSuite: 包含所有發現的測試的測試套件
@@ -40,7 +40,7 @@ def discover_tests(test_type=None):
             sys.exit(1)
     else:
         # 運行所有測試
-        for test_dir in ['unit', 'integration', 'system']:
+        for test_dir in ['unit', 'system']:
             test_path = os.path.join(PROJECT_ROOT, 'tests', test_dir)
             if os.path.exists(test_path):
                 suite.addTests(test_loader.discover(test_path, pattern='test_*.py'))
@@ -52,21 +52,20 @@ def display_help_message():
     print("Discord Bot 測試運行器")
     print("用法: python run_tests.py [選項]")
     print("\n選項:")
-    print("  -t, --type TYPE    運行指定類型的測試 (unit, integration, system)")
+    print("  -t, --type TYPE    運行指定類型的測試 (unit, system)")
     print("  -v, --verbose      輸出詳細的測試結果")
     print("  -f, --failfast     在第一個測試失敗後停止")
     print("  -h, --help         顯示此幫助信息")
     print("\n示例:")
     print("  python run_tests.py                  # 運行所有測試")
     print("  python run_tests.py -t unit          # 僅運行單元測試")
-    print("  python run_tests.py -t integration   # 僅運行整合測試")
     print("  python run_tests.py -v -f            # 運行所有測試，詳細輸出並在第一個失敗後停止")
 
 def run_tests(test_type=None, verbose=1, failfast=False):
     """運行測試
     
     Args:
-        test_type: 測試類型，可以是'unit', 'integration', 'system'或None(所有測試)
+        test_type: 測試類型，可以是'unit', 'system'或None(所有測試)
         verbose: 輸出詳細程度，0-3
         failfast: 是否在第一個測試失敗後停止
         
@@ -90,7 +89,7 @@ def main():
     """主函數"""
     # 解析命令行參數
     parser = argparse.ArgumentParser(description='Discord Bot 測試運行器', add_help=False)
-    parser.add_argument('-t', '--type', choices=['unit', 'integration', 'system'], 
+    parser.add_argument('-t', '--type', choices=['unit', 'system'], 
                         help='運行指定類型的測試')
     parser.add_argument('-v', '--verbose', action='count', default=1,
                         help='輸出詳細的測試結果')

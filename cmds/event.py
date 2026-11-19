@@ -5,7 +5,7 @@ import datetime
 import asyncio
 import os
 import time
-from typing import Dict, List, Set, Callable, Any, Optional, Union
+from typing import Dict, List, Optional, Tuple
 from discord.ext import commands
 from core.classes import Cog_Extension
 from bs4 import BeautifulSoup
@@ -100,7 +100,7 @@ class Event(Cog_Extension):
         except (ValueError, TypeError) as e:
             logger.error(f"無法解析聊天室ID: {e}")
             self.chatroom_id = 0  # 使用默認值
-        self.match_set = set(jData.get('MATCHLIST', []))
+        self.fixed_responses = self._build_fixed_responses()
         self.tiansongbingList = jData.get('tiansongbingList', [
             '蜂蜜鬆餅', '抹茶鬆餅', '藍莓鬆餅', '鮮奶油鬆餅', '花生鬆餅', '巧克力鬆餅', '榛果巧克力鬆餅',
             '蜂蜜鮮奶油鬆餅', '法式檸檬奶霜鬆餅', '香草卡士達鬆餅', '葡萄奶酥鬆餅', '藍莓巧克力鬆餅', '巧克力鮮奶油鬆餅',
@@ -187,15 +187,13 @@ class Event(Cog_Extension):
         if msg.author.bot:
             return
             
-        # 記錄所有訊息
+        # 訊息內容只在 DEBUG 記錄（隱私與日誌量）
         realname = msg.author.nick or msg.author.name
-        logger.info(f"{msg.channel.name}-{realname}: {msg.content}")
+        logger.debug(f"{msg.channel.name}-{realname}: {msg.content}")
         
-        # 檢查是否是使用命令裝飾器註冊的命令，如果是則只由process_commands處理
-        if msg.content == "!抽籤A" or msg.content == "!抽籤B":
-            # 不在這裡處理，讓標準命令系統處理
-            return
-        
+        # 注意：@commands.command 註冊的指令由 commands.Bot 預設的 on_message 處理，
+        # 這個 listener 不可再呼叫 bot.process_commands，否則指令會執行兩次。
+
         # 訓練模式切換
         if msg.content.strip() == "!!啟動":
             self.training_mode = True
@@ -231,10 +229,7 @@ class Event(Cog_Extension):
         # 嘗試並行處理其他回應
         logger.debug(f"檢查默認回應處理: {msg.content}")
         await self.process_default_responses(msg)
-        
-        # 確保標準命令處理也正常進行
-        await self.bot.process_commands(msg)
-        
+
     async def sweet_waffle(self, msg: discord.Message) -> None:
         """處理甜味鬆餅命令"""
         await msg.channel.send(random.choice(self.tiansongbingList))
@@ -475,95 +470,82 @@ class Event(Cog_Extension):
             logger.error(f"淺草寺抽籤時出錯: {e}")
             await ctx.send("抽籤時出錯，請稍後再試")
             
+    def _build_fixed_responses(self) -> Dict[str, List[Tuple[str, str]]]:
+        """建立「完全比對 → 回應」表。
+
+        值為 [(kind, payload), ...]，kind 是 'file'（payload 為圖片路徑）或 'text'。
+        只存路徑，命中時才開檔；不可在這裡建立 discord.File（會開檔且洩漏 handle）。
+        """
+        images = jData.get('IMAGE', [])
+        yiyan = jData.get('YIYAN', [])
+
+        def img(i: int) -> List[Tuple[str, str]]:
+            return [('file', images[i])]
+
+        def yi(i: int) -> List[Tuple[str, str]]:
+            return [('file', yiyan[i])]
+
+        def text(s: str) -> List[Tuple[str, str]]:
+            return [('text', s)]
+
+        earthquake_url = 'https://www.youtube.com/watch?v=Owke6Quk7T0&ab_channel=%E5%8F%B0%E7%81%A3%E5%9C%B0%E9%9C%87%E7%9B%A3%E8%A6%96'
+        table: Dict[str, List[Tuple[str, str]]] = {
+            # 一言圖片
+            '有一天': yi(0), '我有一天': yi(0),
+            '我有個想法': yi(1),
+            '認真?': yi(2),
+            '我意識到': yi(3), '意識到': yi(3), '突然意識到': yi(3),
+            '叫我嗎': yi(4), '找我啊?': yi(4), '叫我嗎?': yi(4),
+            # 反應圖片
+            '你不懂啦': img(24), '你們不懂啦': img(24), '哦嚯': img(24), '哦豁': img(24),
+            '是嗎?': img(13), '是這樣嗎?': img(13), '嗯?': img(13),
+            '是嗎': img(25),
+            '是這樣嗎': img(26),
+            '你給我小心點': img(16), '你給我注意點': img(16), '給我小心點': img(16), '給我注意點': img(16),
+            '!魔法少女物理攻擊': img(18),
+            '!過來': img(20), '!欠打': img(20),
+            '!各位集合': img(19), '!集合': img(19),
+            '!快樂阿C': img(21),
+            '!阿C來勢洶洶': img(22),
+            '!阿C滑倒': img(23), '!C->U': img(23),
+            # 文字
+            '!哈密嘎': text(':melon:'),
+            '血流成河': text('我還真的想看到'),
+            '快樂星期五': text('今天不適合上班'),
+            '下雨': text('雨天, 不適合上班, 可撥天氣'), '下大雨': text('雨天, 不適合上班, 可撥天氣'),
+            '普渡': text('敢不敢跟好兄弟搶零食'), '要普渡': text('敢不敢跟好兄弟搶零食'),
+            '滾': text('嚶嚶嚶'),
+            '畢竟': text('人, 是善變的'),
+            '!地震': text(earthquake_url), '!地震消息': text(earthquake_url),
+            '!靈動': text('那個在嘗試與你溝通'),
+            '!笑話': text('你就是笑話, 自己確認一下'),
+            '!唱歌': text('沒有一次到齊過'),
+        }
+        # MATCHLIST 中的字詞都回同一張圖（不覆蓋上面已定義的觸發詞）
+        for word in jData.get('MATCHLIST', []):
+            table.setdefault(word, img(28))
+        return table
+
     async def process_default_responses(self, msg: discord.Message) -> None:
         """處理一系列固定回應的命令"""
         try:
-            # 使用字典映射來簡化多個if-elif條件
-            yiyan_responses = {
-                '有一天': jData['YIYAN'][0],
-                '我有一天': jData['YIYAN'][0],
-                '我意識到': jData['YIYAN'][3],
-                '意識到': jData['YIYAN'][3],
-                '突然意識到': jData['YIYAN'][3],
-                '叫我嗎': jData['YIYAN'][4],
-                '找我啊?': jData['YIYAN'][4],
-                '叫我嗎?': jData['YIYAN'][4],
-                '我有個想法': jData['YIYAN'][1],
-                '認真?': jData['YIYAN'][2],
-            }
-            
             # 鬆餅混搭命令
             if msg.content in ('!鬆餅混搭 甜+鹹', '!鬆餅混搭 鹹+甜'):
                 await msg.channel.send(f"{random.choice(self.tiansongbingList)}+{random.choice(self.xiansongbingList)}")
                 return
-                
             elif msg.content in ('!鬆餅混搭 甜+炸', '!鬆餅混搭 炸+甜'):
                 await msg.channel.send(f"{random.choice(self.tiansongbingList)}+{random.choice(self.zhasongbingList)}")
                 return
-                
             elif msg.content in ('!鬆餅混搭 鹹+炸', '!鬆餅混搭 炸+鹹'):
                 await msg.channel.send(f"{random.choice(self.xiansongbingList)}+{random.choice(self.zhasongbingList)}")
                 return
-            
-            # 檢查一言圖片回應
-            if msg.content in yiyan_responses:
-                await msg.channel.send(file=discord.File(yiyan_responses[msg.content]))
-                return
-                
-            # 檢查匹配列表響應
-            if msg.content in self.match_set:
-                await msg.channel.send(file=discord.File(jData['IMAGE'][28]))
-                return
-                
-            # 其他特定回應
-            other_responses = {
-                '你不懂啦': (discord.File(jData['IMAGE'][24]),),
-                '你們不懂啦': (discord.File(jData['IMAGE'][24]),),
-                '是嗎?': (discord.File(jData['IMAGE'][13]),),
-                '是這樣嗎?': (discord.File(jData['IMAGE'][13]),),
-                '嗯?': (discord.File(jData['IMAGE'][13]),),
-                '是嗎': (discord.File(jData['IMAGE'][25]),),
-                '是這樣嗎': (discord.File(jData['IMAGE'][26]),),
-                '哦嚯': (discord.File(jData['IMAGE'][24]),),
-                '哦豁': (discord.File(jData['IMAGE'][24]),),
-                '你給我小心點': (discord.File(jData['IMAGE'][16]),),
-                '你給我注意點': (discord.File(jData['IMAGE'][16]),),
-                '給我小心點': (discord.File(jData['IMAGE'][16]),),
-                '給我注意點': (discord.File(jData['IMAGE'][16]),),
-                '!哈密嘎': (':melon:',),
-                '!魔法少女物理攻擊': (discord.File(jData['IMAGE'][18]),),
-                '!過來': (discord.File(jData['IMAGE'][20]),),
-                '!欠打': (discord.File(jData['IMAGE'][20]),),
-                '!各位集合': (discord.File(jData['IMAGE'][19]),),
-                '!集合': (discord.File(jData['IMAGE'][19]),),
-                '!快樂阿C': (discord.File(jData['IMAGE'][21]),),
-                '!阿C來勢洶洶': (discord.File(jData['IMAGE'][22]),),
-                '!阿C滑倒': (discord.File(jData['IMAGE'][23]),),
-                '!C->U': (discord.File(jData['IMAGE'][23]),),
-                '血流成河': ('我還真的想看到',),
-                '快樂星期五': ('今天不適合上班',),
-                '下雨': ('雨天, 不適合上班, 可撥天氣',),
-                '下大雨': ('雨天, 不適合上班, 可撥天氣',),
-                '普渡': ('敢不敢跟好兄弟搶零食',),
-                '要普渡': ('敢不敢跟好兄弟搶零食',),
-                '滾': ('嚶嚶嚶',),
-                '畢竟': ('人, 是善變的',),
-                '!地震': ('https://www.youtube.com/watch?v=Owke6Quk7T0&ab_channel=%E5%8F%B0%E7%81%A3%E5%9C%B0%E9%9C%87%E7%9B%A3%E8%A6%96',),
-                '!地震消息': ('https://www.youtube.com/watch?v=Owke6Quk7T0&ab_channel=%E5%8F%B0%E7%81%A3%E5%9C%B0%E9%9C%87%E7%9B%A3%E8%A6%96',),
-                '!靈動': ('那個在嘗試與你溝通',),
-                '!笑話': ('你就是笑話, 自己確認一下',),
-                '!唱歌': ('沒有一次到齊過',),
-            }
-            
-            # 檢查其他回應
-            if msg.content in other_responses:
-                for response in other_responses[msg.content]:
-                    if isinstance(response, discord.File):
-                        await msg.channel.send(file=response)
-                    else:
-                        await msg.channel.send(response)
-                return
-                
+
+            for kind, payload in self.fixed_responses.get(msg.content, ()):
+                if kind == 'file':
+                    await msg.channel.send(file=discord.File(payload))
+                else:
+                    await msg.channel.send(payload)
+
         except Exception as e:
             logger.error(f"處理固定回應時出錯: {e}")
 

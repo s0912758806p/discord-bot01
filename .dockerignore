@@ -67,7 +67,6 @@ Dockerfile.*
 # 腳本和其他文件
 vm_repair.sh
 vm_health_monitor.sh
-test_module_connector.py
 
 # 保留必要文件
 !requirements.txt
