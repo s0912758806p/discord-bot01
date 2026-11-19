@@ -70,12 +70,7 @@ else
     
     echo -e "${BLUE}安裝依賴...${NC}"
     pip install --upgrade pip
-    if [ -f "requirements.txt" ]; then
-        pip install -r requirements.txt
-    else
-        echo -e "${RED}找不到requirements.txt，安裝基本包${NC}"
-        pip install discord.py python-dotenv aiohttp aiofiles psutil
-    fi
+    pip install -r requirements.txt
 fi
 
 # 檢查.env文件
@@ -88,17 +83,9 @@ if [ ! -f .env ]; then
         echo -e "${RED}未找到.env.example，創建基本.env文件${NC}"
         cat > .env << EOL
 # Discord 機器人設置
-DISCORD_TOKEN=請輸入您的Discord令牌
-PREFIX=!
-DISCORD_HTTP_TIMEOUT=90
-
-# 地震模組設置
-EARTHQUAKE_API_KEY=
-EARTHQUAKE_INIT_TIMEOUT=120
-EARTHQUAKE_RETRY_INTERVAL=5
-EARTHQUAKE_MAX_RETRIES=10
-EARTHQUAKE_INITIAL_DELAY=10
-VM_ENVIRONMENT=true
+DISCORD_TOKEN=
+COMMAND_PREFIX=!
+EARTHQUAKE_CHANNEL=
 
 # 日誌設置
 LOG_LEVEL=INFO
@@ -117,42 +104,9 @@ else
     exit 1
 fi
 
-# 設置額外的環境變數以優化地震模組初始化
-export EARTHQUAKE_INIT_TIMEOUT=120
-export EARTHQUAKE_RETRY_INTERVAL=5
-export MODULE_CONNECTOR_DELAY=5
-
-# 優化VM設置
-echo -e "${BLUE}調整VM環境優化設置...${NC}"
-if [ "$VM_ENVIRONMENT" = "true" ]; then
-    # 增加重連超時
-    export DISCORD_RECONNECT_TIMEOUT=60
-    # 增加HTTP超時
-    export DISCORD_HTTP_TIMEOUT=90
-    # 增加地震模組初始化延遲
-    export EARTHQUAKE_INITIAL_DELAY=15
-    
-    echo -e "${GREEN}已設置VM環境優化參數${NC}"
-fi
-
-# 檢查API文件
-if [ ! -f "config/earthquake_config.json" ]; then
-    echo -e "${YELLOW}創建默認地震設定文件...${NC}"
-    mkdir -p config
-    cat > config/earthquake_config.json << EOL
-{
-  "api_key": "",
-  "polling_interval": 60,
-  "channels": {},
-  "last_check": null
-}
-EOL
-    echo -e "${GREEN}已創建默認地震設定文件${NC}"
-fi
-
 # 清理過時的日誌文件
 echo -e "${BLUE}清理過時日誌文件...${NC}"
-find logs -name "*.log" -type f -mtime +7 -delete 2>/dev/null || true
+find logs -name "*.log*" -type f -mtime +7 -delete 2>/dev/null || true
 
 # 檢查是否是測試模式
 if grep -q "TEST_MODE=true" .env; then
