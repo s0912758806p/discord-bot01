@@ -1,6 +1,5 @@
 import discord
 import random
-import aiohttp
 import datetime
 import asyncio
 import os
@@ -12,10 +11,12 @@ from bs4 import BeautifulSoup
 from opencc import OpenCC
 from core.config import load_config
 from core.cache import cache
-from core.logging import logger, log_command, measure_time
+from core.logging import logger, measure_time
 
 # 載入配置
 jData = load_config('setting.json')
+# OpenCC 建構成本高（載入字典），模組層級建一次
+_S2T = OpenCC('s2t')
 
 class Event(Cog_Extension):
     # 類常量
@@ -82,8 +83,6 @@ class Event(Cog_Extension):
     
     def __init__(self, bot):
         super().__init__(bot)
-        self.session = None
-        self.training_mode = False
         
         # 將配置數據提前處理為更高效的數據結構
         try:
@@ -130,19 +129,6 @@ class Event(Cog_Extension):
             '!今日運勢': self.horoscope_intro,
         }
         
-    async def cog_load(self):
-        """加載模組時調用"""
-        # 創建aiohttp會話
-        self.session = aiohttp.ClientSession()
-        logger.info("Event 模組已加載")
-        
-    async def cog_unload(self):
-        """卸載模組時調用"""
-        # 關閉aiohttp會話
-        if self.session is not None:
-            await self.session.close()
-            logger.info("Event 模組已卸載，關閉 session")
-    
     async def fetch_with_retry(self, url: str, max_retries: int = 3) -> Optional[str]:
         """帶重試機制的網頁請求函數"""
         for attempt in range(max_retries):
@@ -330,9 +316,8 @@ class Event(Cog_Extension):
                 pass
                 
     @measure_time
-    @cache(ttl=1800)  # 30分鐘緩存
     async def get_weather(self, msg: discord.Message) -> None:
-        """獲取天氣信息，帶30分鐘緩存"""
+        """獲取天氣信息"""
         try:
             url = 'https://weather.com/zh-TW/weather/today/l/fe7393b7f2c8eed2cf692bd079361df362d9f0c1c0f896e6e46a649295e15c7d'
             hourStatusUrl = 'https://weather.com/zh-TW/weather/hourbyhour/l/fe7393b7f2c8eed2cf692bd079361df362d9f0c1c0f896e6e46a649295e15c7d'
@@ -369,9 +354,9 @@ class Event(Cog_Extension):
             logger.error(f"獲取天氣信息時出錯: {e}")
             await msg.channel.send(f"獲取天氣信息時出錯，請稍後再試")
             
-    @cache(ttl=86400)  # 24小時緩存
+    @cache(ttl=3600)  # 1 小時：運勢每日更新，避免跨日仍回昨天的內容
     async def get_horoscope_data(self, star_sign: str) -> Optional[str]:
-        """獲取星座運勢數據，帶24小時緩存"""
+        """獲取星座運勢數據，帶 1 小時緩存（只有成功結果會被快取）"""
         try:
             url = f'https://m.xzw.com/fortune/{self.STAR_TYPE_MAP[star_sign]}/'
             
@@ -382,8 +367,7 @@ class Event(Cog_Extension):
                 text = await response.text()
                 soup = BeautifulSoup(text, 'html.parser')
                 horoscope = soup.find(class_='cont').text.strip().replace('。', '。\n')
-                cc = OpenCC('s2t')
-                return cc.convert(horoscope)
+                return _S2T.convert(horoscope)
         except Exception as e:
             logger.error(f"獲取星座 {star_sign} 運勢數據時出錯: {e}")
             return None
@@ -420,16 +404,14 @@ class Event(Cog_Extension):
             
             await ctx.send(f'抽中第{qianRandomNum}籤')
             
-            # 優化：直接計算抽籤結果，而不是循環100次
-            if random.random() < 1:  # 約100%的概率獲得籤詩
-                text = await self.fetch_with_retry(qianUrl)
-                if text:
-                    sp = BeautifulSoup(text, 'html.parser')
-                    name = sp.select('#wrapper .tittle_two')[0].text
-                    qianContent = sp.select('#wrapper div p')[0].text
-                    
-                    await ctx.send(file=discord.File(jData['QIAN'][qianRandomNum - 1]))
-                    await ctx.send(name + '\n' + qianContent)
+            text = await self.fetch_with_retry(qianUrl)
+            if text:
+                sp = BeautifulSoup(text, 'html.parser')
+                name = sp.select('#wrapper .tittle_two')[0].text
+                qianContent = sp.select('#wrapper div p')[0].text
+
+                await ctx.send(file=discord.File(jData['QIAN'][qianRandomNum - 1]))
+                await ctx.send(name + '\n' + qianContent)
                     
             # 記錄執行時間
             elapsed_time = time.time() - start_time

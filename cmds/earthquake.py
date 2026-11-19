@@ -1,6 +1,5 @@
 import os
 import logging
-import aiohttp
 import discord
 import asyncio
 from datetime import datetime, timedelta
@@ -15,7 +14,6 @@ logger = logging.getLogger('discord_bot.earthquake')
 class Earthquake(Cog_Extension):
     def __init__(self, bot):
         super().__init__(bot)
-        self.session = None
         self.earthquake_channel_id = int(os.getenv('EARTHQUAKE_CHANNEL', '0'))
         self.check_interval = 60  # 每分鐘檢查一次
         self.earthquake_url = 'https://www.cwa.gov.tw/V8/C/E/index.html'
@@ -25,16 +23,11 @@ class Earthquake(Cog_Extension):
         logger.info("地震監測模組初始化完成")
         
     async def cog_load(self):
-        # 創建aiohttp會話
-        self.session = aiohttp.ClientSession()
         # 啟動地震監測任務
         self.monitor_earthquakes.start()
         logger.info("地震監測任務已啟動")
         
     async def cog_unload(self):
-        # 關閉aiohttp會話
-        if self.session is not None:
-            await self.session.close()
         # 停止地震監測任務
         self.monitor_earthquakes.cancel()
         logger.info("地震監測任務已停止")

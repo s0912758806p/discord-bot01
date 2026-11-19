@@ -1,26 +1,9 @@
-import discord
-import aiohttp
 from bs4 import BeautifulSoup
 from discord.ext import commands
 from core.classes import Cog_Extension
-from core.cache import cache
 
 class News(Cog_Extension):
-    def __init__(self, bot):
-        super().__init__(bot)
-        self.session = None
-        
-    async def cog_load(self):
-        # 創建aiohttp會話
-        self.session = aiohttp.ClientSession()
-        
-    async def cog_unload(self):
-        # 關閉aiohttp會話
-        if self.session is not None:
-            await self.session.close()
-    
     @commands.command(name="焦點新聞")
-    @cache(ttl=600)  # 緩存10分鐘
     async def focus_news(self, ctx):
         """獲取三立新聞網焦點新聞"""
         url = 'https://www.setn.com/ViewAll.aspx?PageGroupID=0'
@@ -57,7 +40,6 @@ class News(Cog_Extension):
             await ctx.send(f"獲取焦點新聞時發生錯誤: {str(e)}")
     
     @commands.command(name="財經新聞")
-    @cache(ttl=600)  # 緩存10分鐘
     async def financial_news(self, ctx):
         """獲取財經新聞"""
         url = 'https://ec.ltn.com.tw/list/international'
