@@ -1,15 +1,9 @@
-import discord
+import asyncio
 import aiohttp
 import twstock
-import datetime
 from bs4 import BeautifulSoup
 from discord.ext import commands
 from core.classes import Cog_Extension
-from core.cache import cache
-from core.config import load_config
-
-# 載入配置
-jData = load_config('setting.json')
 
 class Stock(Cog_Extension):
     def __init__(self, bot):
@@ -26,7 +20,6 @@ class Stock(Cog_Extension):
             await self.session.close()
             
     @commands.command()
-    @cache(ttl=300)  # 緩存5分鐘
     async def twii(self, ctx):
         """獲取台灣加權指數資訊"""
         url = 'https://invest.cnyes.com/index/TWS/TSE01'
@@ -67,7 +60,6 @@ class Stock(Cog_Extension):
             await ctx.send(f"獲取台股指數時發生錯誤: {str(e)}")
             
     @commands.command()
-    @cache(ttl=300)  # 緩存5分鐘
     async def tws(self, ctx, stock_id: str = None):
         """獲取特定股票資訊"""
         if stock_id is None:
@@ -75,7 +67,8 @@ class Stock(Cog_Extension):
             return
             
         try:
-            stock = twstock.realtime.get(stock_id)
+            # twstock 用同步 requests，丟到 thread 執行以免卡住整個 event loop
+            stock = await asyncio.to_thread(twstock.realtime.get, stock_id)
             
             if stock['success']:
                 stockInfo = list(stock['info'].values())
