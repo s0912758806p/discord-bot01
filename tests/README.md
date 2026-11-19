@@ -13,6 +13,11 @@
    - `test_regressions.py`：針對實際出過的 bug 的回歸測試（指令重複執行、每則訊息開檔、
      擴充在 on_ready 重複載入、twstock 阻塞 event loop），修改 main.py / cmds/ 時務必保持全綠
    - `test_docs_freshness.py`：README 的指令清單必須與程式碼雙向一致；新增、改名或移除指令時要同步更新 README
+   - `test_env_example.py`：`.env.example` 必須與程式實際讀取的環境變數雙向一致；新增或移除設定時要同步更新
+   - `test_market.py`：`core/market.py` 的解析與交易日判斷，使用 `tests/test_data/market/` 下錄製的真實 API 回應
+     （資料來源改版時，重新錄製該檔並修正解析）
+   - `test_volatility.py`：盤中波動通知規則（門檻穿越、急漲急跌、冷卻、換日、重啟不重發）
+   - `test_stock_monitor.py`：台股背景任務（交易時段、休市、早盤報告排版與 Discord 長度限制、`!twii`）
 
 2. **系統測試** - 測試完整系統功能
    - 位於 `tests/system/` 目錄
