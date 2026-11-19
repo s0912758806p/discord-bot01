@@ -71,5 +71,4 @@ vm_health_monitor.sh
 # 保留必要文件
 !requirements.txt
 !.dockerignore
-!config/
 !start.sh 

@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 from opencc import OpenCC
 from core.config import load_config
 from core.cache import cache
-from core.logging import logger, measure_time
+from core.logging import logger
 
 # 載入配置
 jData = load_config('setting.json')
@@ -117,7 +117,6 @@ class Event(Cog_Extension):
         
         # 命令處理器映射
         self.command_handlers = {
-            '!天氣': self.get_weather,
             '!甜味鬆餅': self.sweet_waffle,
             '!鹹味鬆餅': self.savory_waffle,
             '!炸物鬆餅': self.fried_waffle,
@@ -306,45 +305,6 @@ class Event(Cog_Extension):
             except:
                 pass
                 
-    @measure_time
-    async def get_weather(self, msg: discord.Message) -> None:
-        """獲取天氣信息"""
-        try:
-            url = 'https://weather.com/zh-TW/weather/today/l/fe7393b7f2c8eed2cf692bd079361df362d9f0c1c0f896e6e46a649295e15c7d'
-            hourStatusUrl = 'https://weather.com/zh-TW/weather/hourbyhour/l/fe7393b7f2c8eed2cf692bd079361df362d9f0c1c0f896e6e46a649295e15c7d'
-            
-            # 使用並行請求獲取數據
-            text, hourText = await asyncio.gather(
-                self.fetch_with_retry(url),
-                self.fetch_with_retry(hourStatusUrl)
-            )
-            
-            if not text:
-                await msg.channel.send("獲取天氣數據失敗")
-                return
-                
-            soup = BeautifulSoup(text, 'html.parser')
-            
-            name = soup.select('.region-main .CurrentConditions--location--1YWj_')[0].text
-            temper = soup.select('.region-main .CurrentConditions--tempValue--MHmYY')[0].text
-            status = soup.select('.region-main .CurrentConditions--phraseValue--mZC_p')[0].text
-            bodyFeeling = soup.select('.region-main .TodayDetailsCard--feelsLikeTempValue--2icPt')[0].text
-            heighAndLow = soup.select('.region-main .CurrentConditions--tempHiLoValue--3T1DG')[0].text
-            
-            if hourText:
-                hourSoup = BeautifulSoup(hourText, 'html.parser')
-                date = hourSoup.select('.region-main .HourlyForecast--longDate--J_Pdh')[0].text
-            else:
-                date = "今日"
-                
-            await msg.channel.send(date + '\n' + '地區: ' + name + '\n' +
-                                heighAndLow + '\n' + '目前溫度: ' + temper +
-                                '\n' + '體感溫度: ' + bodyFeeling + '\n' +
-                                '氣候: ' + status + '\n')
-        except Exception as e:
-            logger.error(f"獲取天氣信息時出錯: {e}")
-            await msg.channel.send(f"獲取天氣信息時出錯，請稍後再試")
-            
     @cache(ttl=3600)  # 1 小時：運勢每日更新，避免跨日仍回昨天的內容
     async def get_horoscope_data(self, star_sign: str) -> Optional[str]:
         """獲取星座運勢數據，帶 1 小時緩存（只有成功結果會被快取）"""
@@ -460,7 +420,6 @@ class Event(Cog_Extension):
         def text(s: str) -> List[Tuple[str, str]]:
             return [('text', s)]
 
-        earthquake_url = 'https://www.youtube.com/watch?v=Owke6Quk7T0&ab_channel=%E5%8F%B0%E7%81%A3%E5%9C%B0%E9%9C%87%E7%9B%A3%E8%A6%96'
         table: Dict[str, List[Tuple[str, str]]] = {
             # 一言圖片
             '有一天': yi(0), '我有一天': yi(0),
@@ -490,7 +449,6 @@ class Event(Cog_Extension):
             '普渡': text('敢不敢跟好兄弟搶零食'), '要普渡': text('敢不敢跟好兄弟搶零食'),
             '滾': text('嚶嚶嚶'),
             '畢竟': text('人, 是善變的'),
-            '!地震': text(earthquake_url), '!地震消息': text(earthquake_url),
             '!靈動': text('那個在嘗試與你溝通'),
             '!笑話': text('你就是笑話, 自己確認一下'),
             '!唱歌': text('沒有一次到齊過'),

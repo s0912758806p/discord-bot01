@@ -12,7 +12,6 @@ services:
       - ./logs:/app/logs
       - ./setting.json:/app/setting.json
       - ./assets:/app/assets
-      - ./config:/app/config  # 額外掛載配置目錄
       - ./data:/app/data      # 額外掛載資料目錄
     env_file:
       - .env

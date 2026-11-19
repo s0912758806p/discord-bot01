@@ -27,7 +27,7 @@ from core.logging import logger  # noqa: E402  (需在 load_dotenv 之後，才�
 CMDS_DIR = Path(__file__).parent / 'cmds'
 PREFIX = os.getenv('COMMAND_PREFIX', '!')
 HTTP_TIMEOUT = float(os.getenv('HTTP_TIMEOUT', '15'))
-# 新聞/天氣/籤詩網站會擋掉 aiohttp 預設的 User-Agent
+# 股市/籤詩/星座網站會擋掉 aiohttp 預設的 User-Agent
 USER_AGENT = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
     '(KHTML, like Gecko) Chrome/124.0 Safari/537.36'

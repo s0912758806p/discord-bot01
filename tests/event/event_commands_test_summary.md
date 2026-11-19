@@ -1,3 +1,5 @@
+> ⚠ 已被 chore/optimize（PR #2）推翻：`!天氣` 已移除，下表該列不再適用（2026-11-19）
+
 # Discord Bot Event 模組測試總結
 
 ## 測試概述

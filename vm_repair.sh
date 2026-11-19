@@ -1,5 +1,5 @@
 #!/bin/bash
-# VM環境下地震模組修復腳本
+# VM 環境下 Discord 機器人容器診斷與修復腳本
 # 使用方法: ./vm_repair.sh
 
 # 顏色定義
@@ -9,7 +9,7 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}===== 地震模組VM環境修復工具 =====${NC}"
+echo -e "${BLUE}===== Discord 機器人 VM 環境修復工具 =====${NC}"
 echo -e "${BLUE}開始診斷Docker容器問題...${NC}"
 
 # 檢查Docker是否運行
@@ -55,12 +55,9 @@ fi
 echo -e "${YELLOW}3. 分析容器日誌...${NC}"
 echo -e "搜索關鍵錯誤..."
 ERROR_COUNT=$(docker logs discord-bot --tail 200 2>&1 | grep -i -E "error|exception|traceback|failed" | wc -l)
-EARTHQUAKE_MODULE_ERRORS=$(docker logs discord-bot --tail 200 2>&1 | grep -i -E "地震模組|earthquake module" | grep -i -E "error|failed|未就緒" | wc -l)
 
 if [ $ERROR_COUNT -gt 10 ]; then
     echo -e "${RED}發現大量錯誤 ($ERROR_COUNT 條)${NC}"
-elif [ $EARTHQUAKE_MODULE_ERRORS -gt 0 ]; then
-    echo -e "${RED}發現地震模組相關錯誤 ($EARTHQUAKE_MODULE_ERRORS 條)${NC}"
 else
     echo -e "${GREEN}日誌分析: 未發現嚴重錯誤${NC}"
 fi
@@ -81,11 +78,10 @@ docker stats discord-bot --no-stream --format "CPU: {{.CPUPerc}}, 記憶體: {{.
 echo -e "\n${BLUE}===== 修復選項 =====${NC}"
 echo -e "${YELLOW}1. 重啟容器${NC}"
 echo -e "${YELLOW}2. 重建容器${NC}"
-echo -e "${YELLOW}3. 強制初始化地震模組${NC}"
-echo -e "${YELLOW}4. 顯示最近日誌${NC}"
-echo -e "${YELLOW}5. 退出${NC}"
+echo -e "${YELLOW}3. 顯示最近日誌${NC}"
+echo -e "${YELLOW}4. 退出${NC}"
 
-read -p "請選擇操作 [1-5]: " option
+read -p "請選擇操作 [1-4]: " option
 
 case $option in
     1)
@@ -116,70 +112,10 @@ case $option in
         fi
         ;;
     3)
-        echo -e "${BLUE}正在強制初始化地震模組...${NC}"
-        echo "嘗試在容器內執行地震模組重啟命令..."
-        # 在容器中執行Python代碼，嘗試重啟地震模組
-        docker exec discord-bot python3 -c "
-import asyncio
-import sys
-
-async def restart_earthquake():
-    try:
-        # 動態導入Discord庫
-        import discord
-        from discord.ext import commands
-        
-        # 創建一個虛擬bot實例
-        bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
-        
-        # 在這裡，我們調用main.py中的setup_commands函數
-        import importlib.util
-        import os
-        
-        print('嘗試強制初始化地震模組...')
-        
-        # 導入地震模組
-        try:
-            from cmds.earthquake import Earthquake
-            from cmds.earthquake_commands import EarthquakeCommands
-            print('成功導入模組類')
-            
-            # 檢查模組文件
-            if os.path.exists('./cmds/earthquake.py') and os.path.exists('./cmds/earthquake_commands.py'):
-                print('模組文件存在')
-            else:
-                print('警告: 模組文件不存在')
-            
-            # 打印模組屬性
-            print(f'Earthquake模組屬性: {dir(Earthquake)}')
-            print(f'EarthquakeCommands模組屬性: {dir(EarthquakeCommands)}')
-            
-            print('初始化完成')
-            print('請在Discord中執行!重啟地震模組命令以完成修復')
-            
-        except ImportError as e:
-            print(f'模組導入失敗: {e}')
-            sys.exit(1)
-            
-    except Exception as e:
-        print(f'強制初始化失敗: {e}')
-        sys.exit(1)
-
-if __name__ == '__main__':
-    print('開始強制初始化流程...')
-    try:
-        asyncio.run(restart_earthquake())
-        print('強制初始化完成')
-    except Exception as e:
-        print(f'運行失敗: {e}')
-        sys.exit(1)
-"
-        ;;
-    4)
         echo -e "${BLUE}顯示最近日誌...${NC}"
         docker logs discord-bot --tail 100
         ;;
-    5)
+    4)
         echo -e "${BLUE}退出${NC}"
         exit 0
         ;;
@@ -194,5 +130,4 @@ echo -e "${YELLOW}提示: 如果問題仍然存在，請嘗試:${NC}"
 echo "1. 使用docker-compose.yml中的network_mode: \"host\"設置"
 echo "2. 增加retry次數和等待時間"
 echo "3. 檢查VM環境的資源限制和網絡連接"
-echo "4. 在Discord中執行!重啟地震模組命令"
 echo -e "${GREEN}完成${NC}" 

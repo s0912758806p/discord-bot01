@@ -84,7 +84,6 @@ class TestVMEnvironmentSetup(unittest.TestCase):
         # 檢查腳本中是否包含目錄創建邏輯
         self.assertIn('mkdir -p logs', content)
         self.assertIn('mkdir -p data', content)
-        self.assertIn('mkdir -p config', content)
         
     def test_start_script_environment_variables(self):
         """測試啟動腳本環境變數設置"""
@@ -139,8 +138,6 @@ class TestVMEnvironmentInitialization(AsyncTestCase):
         os.environ['VM_ENVIRONMENT'] = 'true'
         os.environ['DOCKER_ENVIRONMENT'] = 'true'
         os.environ['TEST_MODE'] = 'true'
-        os.environ['EARTHQUAKE_INIT_TIMEOUT'] = '5'
-        os.environ['EARTHQUAKE_RETRY_INTERVAL'] = '1'
         os.environ['MODULE_CONNECTOR_DELAY'] = '1'
         
     def tearDown(self):
@@ -196,7 +193,7 @@ class TestVMEnvironmentInitialization(AsyncTestCase):
     def test_necessary_directories_exists(self):
         """測試必要的目錄是否存在"""
         # 檢查必要目錄（logs/、data/ 是執行期才建立的目錄，不在 repo 內）
-        dirs_to_check = ['config', 'cmds', 'core', 'assets']
+        dirs_to_check = ['cmds', 'core', 'assets']
         for dir_name in dirs_to_check:
             dir_path = os.path.join(PROJECT_ROOT, dir_name)
             self.assertTrue(os.path.exists(dir_path), f"{dir_name} 目錄不存在")
@@ -214,8 +211,6 @@ class TestVMDeployment(unittest.TestCase):
         # 設置VM環境變數
         os.environ['VM_ENVIRONMENT'] = 'true'
         os.environ['DISCORD_HTTP_TIMEOUT'] = '90'
-        os.environ['EARTHQUAKE_INIT_TIMEOUT'] = '120'
-        os.environ['EARTHQUAKE_RETRY_INTERVAL'] = '5'
         os.environ['VM_MEMORY_LIMIT_MB'] = '512'
         
         # 備份原始檔案
@@ -303,7 +298,7 @@ class TestVMDeployment(unittest.TestCase):
             
         # 驗證腳本關鍵功能
         self.assertIn('docker', script_content, "修復腳本中缺少 Docker 相關指令")
-        self.assertIn('earthquake', script_content, "修復腳本中缺少地震模組相關指令")
+        self.assertNotIn('earthquake', script_content, "地震模組已移除，修復腳本不應再引用")
         self.assertIn('restart', script_content, "修復腳本中缺少重啟功能")
     
     def test_health_monitor_script(self):
@@ -335,8 +330,6 @@ class TestVMInitialization(unittest.TestCase):
         # 設置VM環境變數
         os.environ['VM_ENVIRONMENT'] = 'true'
         os.environ['DISCORD_HTTP_TIMEOUT'] = '90'
-        os.environ['EARTHQUAKE_INIT_TIMEOUT'] = '120'
-        os.environ['EARTHQUAKE_RETRY_INTERVAL'] = '5'
         
         # 創建測試配置文件
         self.test_config_file = create_test_data_file(
@@ -345,11 +338,9 @@ class TestVMInitialization(unittest.TestCase):
                 "api_key": "vm_test_api_key",
                 "watch_channels": ["123456789"],
                 "alert_channels": ["987654321"],
-                "earthquake_data": {},
                 "last_sent_times": {}
             }
         )
-        os.environ['EARTHQUAKE_CONFIG_FILE'] = self.test_config_file
     
     def tearDown(self):
         """清理測試環境"""
@@ -404,11 +395,7 @@ class TestVMInitialization(unittest.TestCase):
         # 檢查必要的環境變數
         self.assertEqual(os.environ.get('VM_ENVIRONMENT'), 'true')
         self.assertEqual(os.environ.get('DISCORD_HTTP_TIMEOUT'), '90')
-        self.assertEqual(os.environ.get('EARTHQUAKE_INIT_TIMEOUT'), '120')
-        self.assertEqual(os.environ.get('EARTHQUAKE_RETRY_INTERVAL'), '5')
-        
-        # 檢查配置文件路徑
-        self.assertTrue(os.path.exists(os.environ.get('EARTHQUAKE_CONFIG_FILE')))
+
     
     def test_startup_sequence(self):
         """測試啟動序列"""
