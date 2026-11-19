@@ -12,6 +12,7 @@
    - 使用模擬（mock）替代外部依賴
    - `test_regressions.py`：針對實際出過的 bug 的回歸測試（指令重複執行、每則訊息開檔、
      擴充在 on_ready 重複載入、twstock 阻塞 event loop），修改 main.py / cmds/ 時務必保持全綠
+   - `test_docs_freshness.py`：README 的指令清單必須與程式碼一致；新增/改名指令時要同步更新 README
 
 2. **系統測試** - 測試完整系統功能
    - 位於 `tests/system/` 目錄
