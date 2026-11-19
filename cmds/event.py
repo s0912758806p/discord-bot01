@@ -180,19 +180,6 @@ class Event(Cog_Extension):
         # 注意：@commands.command 註冊的指令由 commands.Bot 預設的 on_message 處理，
         # 這個 listener 不可再呼叫 bot.process_commands，否則指令會執行兩次。
 
-        # 訓練模式切換
-        if msg.content.strip() == "!!啟動":
-            self.training_mode = True
-            await msg.channel.send("好的，已經啟動了。")
-            logger.info("訓練模式已啟動")
-            return
-
-        if msg.content.strip() == "!!關閉":
-            self.training_mode = False
-            await msg.channel.send("好的，已經關閉了。")
-            logger.info("訓練模式已關閉")
-            return
-
         # 檢查映射表中的命令
         handler = self.command_handlers.get(msg.content)
         if handler:
