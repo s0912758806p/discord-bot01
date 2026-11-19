@@ -4,8 +4,12 @@
 指令：
 - !twii：加權指數（cnyes 網頁）
 - !tws <股票代碼>：個股即時資訊（twstock）
+- !早盤報告：立即在目前頻道產生早盤報告（預覽用）
 
 背景任務（需設定 STOCK_CHANNEL，否則不啟動；指令照常可用）：
+- 早盤報告：交易日 STOCK_REPORT_TIME（預設 08:30）發一則 embed：台股收盤（加權、櫃買）、
+  美股收盤（道瓊、S&P 500、那斯達克、費半、台積電 ADR）、國內與國際新聞各 STOCK_NEWS_LIMIT 則
+  （上一個交易日報告時間到現在，沿時間平均挑選，只列標題與連結）。任一段抓不到只顯示「暫時無法取得」。
 - 盤中監控：交易日 09:00–13:35 每 STOCK_POLL_SECONDS 秒抓一次加權指數（證交所 MIS），
   交給 core/volatility.py 判斷，「首次突破 ±STOCK_ALERT_STEP_PCT 的倍數」或
   「STOCK_RAPID_WINDOW_MIN 分鐘內急漲急跌 STOCK_RAPID_PCT%」時通知所有 STOCK_CHANNEL 頻道。
@@ -36,6 +40,13 @@ from core.volatility import Alert, VolatilityDetector
 MARKET_OPEN = dt.time(9, 0)
 MONITOR_END = dt.time(13, 35)  # 13:30 收盤後再多抓幾分鐘，拿到最後一盤
 HOLIDAY_RETRY = dt.timedelta(minutes=10)
+DEFAULT_REPORT_TIME = dt.time(8, 30, tzinfo=market.TPE)
+
+DOMESTIC_NEWS = ('tw_stock', 'tw_macro')
+WORLD_NEWS = ('wd_stock', 'us_stock', 'wd_macro')
+FIELD_LIMIT = 1024  # Discord embed field value 上限
+SHORT_NAMES = {'發行量加權股價指數': '加權指數'}
+WEEKDAYS = '一二三四五六日'
 
 
 def now_tpe() -> dt.datetime:
@@ -52,6 +63,8 @@ class StockSettings:
     rapid_window_min: int = 5
     rapid_cooldown_min: int = 15
     state_path: Optional[Path] = None
+    report_time: dt.time = DEFAULT_REPORT_TIME
+    news_limit: int = 8
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> 'StockSettings':
@@ -79,6 +92,14 @@ class StockSettings:
             else:
                 logger.warning('STOCK_CHANNEL 中的 %r 不是頻道 ID，已略過', part)
 
+        report_time = DEFAULT_REPORT_TIME
+        raw_time = (env.get('STOCK_REPORT_TIME') or '').strip()
+        if raw_time:
+            try:
+                report_time = dt.datetime.strptime(raw_time, '%H:%M').time().replace(tzinfo=market.TPE)
+            except ValueError:
+                logger.warning('STOCK_REPORT_TIME=%r 不是 HH:MM，改用預設 08:30', raw_time)
+
         return cls(
             channels=tuple(channels),
             poll_seconds=num('STOCK_POLL_SECONDS', 30.0),
@@ -87,7 +108,81 @@ class StockSettings:
             rapid_window_min=int(num('STOCK_RAPID_WINDOW_MIN', 5)),
             rapid_cooldown_min=int(num('STOCK_RAPID_COOLDOWN_MIN', 15)),
             state_path=PROJECT_ROOT / 'data' / 'stock_alert_state.json',
+            report_time=report_time,
+            news_limit=int(num('STOCK_NEWS_LIMIT', 8)),
         )
+
+
+# ---------- 早盤報告（資料 + 純函式排版） ----------
+
+@dataclass
+class MorningReport:
+    """各段資料；None 表示該段抓取失敗（其他段照常顯示）。"""
+    generated_at: dt.datetime
+    news_since: dt.datetime
+    indices: Optional[List[market.IndexQuote]]
+    global_quotes: Optional[List[market.GlobalQuote]]
+    domestic_news: Optional[List[market.NewsItem]]
+    world_news: Optional[List[market.NewsItem]]
+
+
+def _arrow(change: float) -> str:
+    return '🔺' if change > 0 else '🔻' if change < 0 else '—'
+
+
+def _fit(lines: List[str], limit: int = FIELD_LIMIT) -> str:
+    """把行接起來並截到 limit 字內（整行捨棄，不切斷連結）。"""
+    kept: List[str] = []
+    for line in lines:
+        if len('\n'.join(kept + [line])) > limit:
+            break
+        kept.append(line)
+    return '\n'.join(kept)
+
+
+def _quote_lines(rows) -> List[str]:
+    return [f'{SHORT_NAMES.get(name, name)}　{price:,.2f}　{_arrow(change)}{abs(change):,.2f}（{pct:+.2f}%）'
+            for name, price, change, pct in rows]
+
+
+def _news_lines(items: List[market.NewsItem]) -> List[str]:
+    # 標題裡的 [ ] 會打斷 Discord 的 [文字](連結) 語法，換成全形
+    return [f'• [{i.title.replace("[", "［").replace("]", "］")}]({i.url})' for i in items]
+
+
+def render_morning_report(report: MorningReport) -> discord.Embed:
+    now = report.generated_at
+    embed = discord.Embed(
+        title=f'☀️ 台股早盤報告　{now:%Y/%m/%d}（{WEEKDAYS[now.weekday()]}）',
+        color=discord.Color.gold(),
+    )
+
+    unavailable = '暫時無法取得'
+    if report.indices is None:
+        embed.add_field(name='台股收盤', value=unavailable, inline=False)
+    elif not report.indices:
+        embed.add_field(name='台股收盤', value='無資料', inline=False)
+    else:
+        day = report.indices[0].date
+        rows = [(q.name, q.price, q.change, q.change_pct) for q in report.indices]
+        embed.add_field(name=f'台股收盤（{day:%m/%d}）', value=_fit(_quote_lines(rows)), inline=False)
+
+    if report.global_quotes is None:
+        value = unavailable
+    else:
+        rows = [(q.name, q.price, q.change, q.change_pct) for q in report.global_quotes]
+        value = _fit(_quote_lines(rows)) or '無資料'
+    embed.add_field(name='美股收盤', value=value, inline=False)
+
+    for title, items in (('國內財經新聞', report.domestic_news), ('國際財經新聞', report.world_news)):
+        if items is None:
+            value = unavailable
+        else:
+            value = _fit(_news_lines(items)) or '這段期間沒有新聞'
+        embed.add_field(name=title, value=value, inline=False)
+
+    embed.set_footer(text=f'資料來源：臺灣證券交易所、鉅亨網｜新聞期間 {report.news_since:%m/%d %H:%M} 起')
+    return embed
 
 
 class Stock(Cog_Extension):
@@ -104,18 +199,22 @@ class Stock(Cog_Extension):
         self._holidays: Dict[int, Set[dt.date]] = {}
         self._holiday_retry_at: Optional[dt.datetime] = None
         self.monitor.change_interval(seconds=self.settings.poll_seconds)
+        self.morning_report.change_interval(time=self.settings.report_time)
 
     # ---------- 生命週期 ----------
 
     async def cog_load(self) -> None:
         if not self.settings.channels:
-            logger.info('未設定 STOCK_CHANNEL，台股盤中監控不啟動')
+            logger.info('未設定 STOCK_CHANNEL，台股盤中監控與早盤報告不啟動')
             return
         self.monitor.start()
-        logger.info('台股盤中監控已啟動，通知頻道: %s', self.settings.channels)
+        self.morning_report.start()
+        logger.info('台股盤中監控與早盤報告（%s）已啟動，通知頻道: %s',
+                    self.settings.report_time.strftime('%H:%M'), self.settings.channels)
 
     async def cog_unload(self) -> None:
         self.monitor.cancel()
+        self.morning_report.cancel()
 
     # ---------- 共用 ----------
 
@@ -182,7 +281,60 @@ class Stock(Cog_Extension):
     async def _before_monitor(self) -> None:
         await self.bot.wait_until_ready()
 
+    # ---------- 早盤報告 ----------
+
+    async def _news(self, categories: Tuple[str, ...], start: dt.datetime,
+                    end: dt.datetime) -> List[market.NewsItem]:
+        groups = await asyncio.gather(*(market.fetch_news(self.session, c, start, end)
+                                        for c in categories))
+        return market.merge_news(groups, self.settings.news_limit)
+
+    async def collect_report(self, now: dt.datetime) -> MorningReport:
+        """新聞期間：上一個交易日的報告時間 → now（週一會涵蓋週末）。各段獨立，失敗只影響該段。"""
+        holidays = await self.holidays_for(now.year) | await self.holidays_for(now.year - 1)
+        prev_day = market.previous_trading_day(now.date(), holidays)
+        since = dt.datetime.combine(prev_day, self.settings.report_time)
+
+        results = await asyncio.gather(
+            market.fetch_indices(self.session),
+            market.fetch_global_quotes(self.session),
+            self._news(DOMESTIC_NEWS, since, now),
+            self._news(WORLD_NEWS, since, now),
+            return_exceptions=True,
+        )
+        sections = ('台股指數', '美股', '國內新聞', '國際新聞')
+        for name, result in zip(sections, results):
+            if isinstance(result, BaseException):
+                logger.warning('早盤報告：%s 抓取失敗：%s', name, result)
+        indices, global_quotes, domestic, world = (
+            None if isinstance(r, BaseException) else r for r in results)
+        return MorningReport(now, since, indices, global_quotes, domestic, world)
+
+    @tasks.loop(time=DEFAULT_REPORT_TIME)
+    async def morning_report(self) -> None:
+        try:
+            now = now_tpe()
+            if not market.is_trading_day(now.date(), await self.holidays_for(now.year)):
+                logger.info('今天不是交易日，不發早盤報告')
+                return
+            embed = render_morning_report(await self.collect_report(now))
+            await self.broadcast(embed=embed)
+            logger.info('早盤報告已發送')
+        except Exception:
+            logger.exception('早盤報告發生未預期錯誤')
+
+    @morning_report.before_loop
+    async def _before_morning_report(self) -> None:
+        await self.bot.wait_until_ready()
+
     # ---------- 指令 ----------
+
+    @commands.command(name='早盤報告')
+    async def morning_report_now(self, ctx):
+        """立即在這個頻道產生早盤報告（預覽用，不限交易日）"""
+        async with ctx.typing():
+            embed = render_morning_report(await self.collect_report(now_tpe()))
+        await ctx.send(embed=embed)
 
     @commands.command()
     async def twii(self, ctx):

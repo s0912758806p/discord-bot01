@@ -134,6 +134,129 @@ class TestHolidayCache(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ok.await_count, 1)
 
 
+def news(n: int, title_len: int = 30):
+    from core.market import NewsItem
+    base = tpe(TODAY, 8)
+    return [NewsItem(f'新聞{i}' + '字' * title_len, f'https://news.cnyes.com/news/id/{i}',
+                     base - dt.timedelta(hours=i)) for i in range(n)]
+
+
+def report(**overrides):
+    from cmds.stock import MorningReport
+    from core.market import GlobalQuote
+    data = dict(
+        generated_at=tpe(TODAY, 8, 30),
+        news_since=tpe(TODAY - dt.timedelta(days=1), 8, 30),
+        indices=[quote(-4.4, TODAY - dt.timedelta(days=1))],
+        global_quotes=[GlobalQuote('道瓊指數', 50198.17, -561.25, -1.11),
+                       GlobalQuote('台積電ADR', 362.62, 2.93, 0.81)],
+        domestic_news=news(8),
+        world_news=news(8),
+    )
+    data.update(overrides)
+    return MorningReport(**data)
+
+
+class TestRenderMorningReport(unittest.TestCase):
+    def render(self, **overrides):
+        from cmds.stock import render_morning_report
+        return render_morning_report(report(**overrides))
+
+    def fields(self, embed):
+        return {f.name: f.value for f in embed.fields}
+
+    def test_has_all_four_sections(self):
+        embed = self.render()
+        names = [f.name for f in embed.fields]
+        self.assertEqual(names, ['台股收盤（11/18）', '美股收盤', '國內財經新聞', '國際財經新聞'])
+        self.assertIn('2026/11/19（四）', embed.title)
+        f = self.fields(embed)
+        self.assertIn('加權指數　38,240.00　🔻1,760.00（-4.40%）', f['台股收盤（11/18）'])
+        self.assertIn('道瓊指數　50,198.17　🔻561.25（-1.11%）', f['美股收盤'])
+        self.assertIn('台積電ADR　362.62　🔺2.93（+0.81%）', f['美股收盤'])
+        self.assertEqual(f['國內財經新聞'].count('https://news.cnyes.com/news/id/'), 8)
+
+    def test_fields_stay_within_discord_limit(self):
+        embed = self.render(domestic_news=news(30, title_len=80), world_news=news(30, title_len=80))
+        for field in embed.fields:
+            self.assertLessEqual(len(field.value), 1024, field.name)
+        self.assertLessEqual(len(embed), 6000)
+        # 截斷是整行捨棄，最後一行仍是完整連結
+        self.assertTrue(self.fields(embed)['國內財經新聞'].endswith(')'))
+
+    def test_failed_section_does_not_hide_others(self):
+        f = self.fields(self.render(global_quotes=None, world_news=None))
+        self.assertEqual(f['美股收盤'], '暫時無法取得')
+        self.assertEqual(f['國際財經新聞'], '暫時無法取得')
+        self.assertIn('https://', f['國內財經新聞'])
+
+    def test_brackets_in_title_do_not_break_links(self):
+        from core.market import NewsItem
+        item = NewsItem('【盤前】台積電[ADR]大漲', 'https://x/1', tpe(TODAY, 7))
+        f = self.fields(self.render(domestic_news=[item]))
+        self.assertEqual(f['國內財經新聞'], '• [【盤前】台積電［ADR］大漲](https://x/1)')
+
+
+class TestMorningReportTask(unittest.IsolatedAsyncioTestCase):
+    def patches(self, now):
+        from core.market import GlobalQuote
+        return (
+            patch('cmds.stock.now_tpe', return_value=now),
+            patch('cmds.stock.market.fetch_holidays', AsyncMock(return_value={dt.date(2026, 12, 25)})),
+            patch('cmds.stock.market.fetch_indices', AsyncMock(return_value=[quote(-1)])),
+            patch('cmds.stock.market.fetch_global_quotes',
+                  AsyncMock(return_value=[GlobalQuote('道瓊指數', 1.0, 0.1, 0.1)])),
+            patch('cmds.stock.market.fetch_news', AsyncMock(return_value=news(3))),
+        )
+
+    async def run_task(self, now):
+        cog, _, sent = make_cog()
+        p = self.patches(now)
+        with p[0], p[1], p[2], p[3], p[4] as fetch_news:
+            await cog.morning_report.coro(cog)
+        return cog, sent, fetch_news
+
+    async def test_sends_embed_on_trading_day(self):
+        _, sent, _ = await self.run_task(tpe(TODAY, 8, 30))
+        self.assertEqual(set(sent), {111, 222})
+        embed = sent[111].send.await_args.kwargs['embed']
+        self.assertIn('台股早盤報告', embed.title)
+
+    async def test_skips_weekend_and_holiday(self):
+        for day in (dt.date(2026, 11, 21), dt.date(2026, 12, 25)):
+            _, sent, fetch_news = await self.run_task(tpe(day, 8, 30))
+            self.assertEqual(sent, {})
+            fetch_news.assert_not_awaited()
+
+    async def test_monday_news_window_covers_weekend(self):
+        monday = dt.date(2026, 11, 23)
+        _, _, fetch_news = await self.run_task(tpe(monday, 8, 30))
+        starts = {c.args[2] for c in fetch_news.await_args_list}
+        self.assertEqual(starts, {tpe(dt.date(2026, 11, 20), 8, 30)})  # 上週五 08:30
+        categories = {c.args[1] for c in fetch_news.await_args_list}
+        self.assertEqual(categories, {'tw_stock', 'tw_macro', 'wd_stock', 'us_stock', 'wd_macro'})
+
+    async def test_one_failing_source_still_sends_report(self):
+        cog, _, sent = make_cog()
+        p = self.patches(tpe(TODAY, 8, 30))
+        with p[0], p[1], p[2], p[4], \
+             patch('cmds.stock.market.fetch_global_quotes', AsyncMock(side_effect=TimeoutError)):
+            await cog.morning_report.coro(cog)
+        embed = sent[111].send.await_args.kwargs['embed']
+        self.assertEqual({f.name: f.value for f in embed.fields}['美股收盤'], '暫時無法取得')
+
+    def test_report_time_from_env(self):
+        from cmds.stock import StockSettings
+        self.assertEqual(StockSettings.from_env({'STOCK_REPORT_TIME': '07:45'}).report_time,
+                         dt.time(7, 45, tzinfo=TPE))
+        self.assertEqual(StockSettings.from_env({'STOCK_REPORT_TIME': '25:99'}).report_time,
+                         dt.time(8, 30, tzinfo=TPE))
+
+    def test_report_loop_uses_configured_time(self):
+        cog, _, _ = make_cog(report_time=dt.time(7, 45, tzinfo=TPE))
+        self.assertEqual(cog.morning_report.time, [dt.time(7, 45, tzinfo=TPE)])
+
+
 class TestLifecycle(unittest.IsolatedAsyncioTestCase):
     async def test_no_channel_means_no_background_task(self):
         cog, _, _ = make_cog(channels=())

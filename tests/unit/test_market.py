@@ -56,6 +56,15 @@ class TestParseCnyes(unittest.TestCase):
         self.assertTrue(first.url.startswith('https://news.cnyes.com/news/id/'))
         self.assertEqual(first.published.tzinfo, market.TPE)
 
+    def test_news_skips_auto_generated_flash_items(self):
+        data = {'items': {'data': [
+            {'newsId': 1, 'title': '盤中速報 - 集中市場加權指數下跌-1847.24點', 'publishAt': 1795000000},
+            {'newsId': 2, 'title': '鉅亨速報 - Factset 最新調查：全新目標價調降', 'publishAt': 1795000000},
+            {'newsId': 3, 'title': '營收速報 - 某公司10月營收', 'publishAt': 1795000000},
+            {'newsId': 4, 'title': '台股殺不停 金管會祭五大穩盤措施', 'publishAt': 1795000000},
+        ]}}
+        self.assertEqual([i.title for i in market.parse_cnyes_news(data)], ['台股殺不停 金管會祭五大穩盤措施'])
+
     def test_merge_news_dedupes_keeping_newer(self):
         t = lambda h: dt.datetime(2026, 11, 19, h, tzinfo=market.TPE)
         a = market.NewsItem('A', 'u1', t(8))
