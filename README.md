@@ -49,6 +49,7 @@ cp .env.example .env
 編輯 `.env` 文件，填寫以下資訊（完整清單與說明見 `.env.example`）：
 - `DISCORD_TOKEN`：Discord 機器人 Token（必填）
 - `COMMAND_PREFIX`：指令前綴，預設為 `!`
+- `STOCK_CHANNEL`：接收台股通知的頻道 ID（留空則不啟動）
 
 Bot 需在 Developer Portal 開啟 **Message Content** 與 **Server Members** 兩個 Privileged Gateway Intents。
 
@@ -84,6 +85,15 @@ pytest -q
 ### 股票
 - `!twii`：台灣加權指數
 - `!tws <股票代碼>`：個股即時資訊，例如 `!tws 2330`
+
+**盤中波動通知**（設定 `STOCK_CHANNEL` 後啟用，可逗號分隔多個頻道 ID）：
+交易日 09:00–13:35 每 30 秒抓一次加權指數（證交所 MIS），以下情況會通知：
+- 漲跌幅（相對昨收）首次突破 ±1%、±2%、±3%…，每個門檻每天只通知一次；跳空越過多個門檻只發最高的那則
+- 5 分鐘內從高點急跌或從低點急漲超過 0.7%，同方向 15 分鐘內不重發
+
+門檻、間隔與冷卻都可在 `.env` 調整（見 `.env.example` 的「台股通知」段落）。
+已通知的門檻記在 `data/stock_alert_state.json`，當天重啟不會重發。
+交易日依證交所開休市日期表判斷；颱風等臨時休市時 MIS 不會有當天資料，也不會誤發。
 
 ### 星座運勢
 - `!今日運勢`：使用說明
