@@ -28,7 +28,7 @@
 
 ### 前置需求
 
-- Python 3.8 或更高版本
+- Python 3.12（與 Docker 映像一致；3.9 以上應可執行）
 - pip 套件管理器
 - Discord 開發者帳號與 Bot Token
 
@@ -40,19 +40,23 @@ git clone <repository-url>
 cd discord-bot01
 ```
 
-2. 安裝依賴
+2. 建立虛擬環境並安裝依賴
 ```bash
-pip install -r requirements.txt
+python3.12 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt        # 執行期依賴
+pip install -r requirements-dev.txt    # 另含測試工具（開發時才需要）
 ```
 
 3. 配置環境變數
 ```bash
 cp .env.example .env
 ```
-編輯 `.env` 文件，填寫以下必要資訊：
-- `DISCORD_TOKEN`：Discord 機器人 Token
+編輯 `.env` 文件，填寫以下資訊（完整清單與說明見 `.env.example`）：
+- `DISCORD_TOKEN`：Discord 機器人 Token（必填）
 - `COMMAND_PREFIX`：指令前綴，預設為 `!`
 - `EARTHQUAKE_CHANNEL`：接收地震通知的頻道 ID
+
+Bot 需在 Developer Portal 開啟 **Message Content** 與 **Server Members** 兩個 Privileged Gateway Intents。
 
 4. 啟動機器人
 ```bash
@@ -61,9 +65,16 @@ python main.py
 
 ### Docker 部署
 
-使用 Docker Compose 快速部署：
+使用 Docker Compose 快速部署（映像為 `python:3.12-slim`，只安裝 `requirements.txt`）：
 ```bash
-docker-compose up -d
+docker compose up -d --build
+```
+日誌寫在掛載的 `./logs/discord.log`（自動輪替）。
+
+### 測試
+
+```bash
+pytest -q
 ```
 
 ## 指令列表

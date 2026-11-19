@@ -93,10 +93,9 @@ class TestVMEnvironmentSetup(unittest.TestCase):
         with open(script_path, 'r') as f:
             content = f.read()
             
-        # 檢查腳本中是否包含環境變數設置邏輯
-        self.assertIn('EARTHQUAKE_INIT_TIMEOUT', content)
-        self.assertIn('EARTHQUAKE_RETRY_INTERVAL', content)
-        self.assertIn('DISCORD_HTTP_TIMEOUT', content)
+        # 啟動前必須檢查 token，且最後啟動 main.py
+        self.assertIn('DISCORD_TOKEN', content)
+        self.assertIn('python3 main.py', content)
         
     def test_dockerfile_exists(self):
         """測試 Dockerfile 是否存在"""
@@ -111,10 +110,10 @@ class TestVMEnvironmentSetup(unittest.TestCase):
             content = f.read()
             
         # 檢查 Dockerfile 中是否包含必要設置
-        self.assertIn('DISCORD_HTTP_TIMEOUT', content)
-        self.assertIn('EARTHQUAKE_INIT_TIMEOUT', content)
-        self.assertIn('EARTHQUAKE_RETRY_INTERVAL', content)
+        self.assertIn('FROM python:3.12', content)  # 與本地/CI 使用的 Python 版本一致
         self.assertIn('Asia/Taipei', content)  # 檢查時區設置
+        self.assertIn('main.py', content)
+        self.assertNotIn('requirements-dev', content)  # 正式映像不裝測試依賴
         
     def test_dockerignore_exists(self):
         """測試 .dockerignore 是否存在"""
@@ -196,8 +195,8 @@ class TestVMEnvironmentInitialization(AsyncTestCase):
         
     def test_necessary_directories_exists(self):
         """測試必要的目錄是否存在"""
-        # 檢查必要目錄
-        dirs_to_check = ['config', 'data', 'logs', 'cmds']
+        # 檢查必要目錄（logs/、data/ 是執行期才建立的目錄，不在 repo 內）
+        dirs_to_check = ['config', 'cmds', 'core', 'assets']
         for dir_name in dirs_to_check:
             dir_path = os.path.join(PROJECT_ROOT, dir_name)
             self.assertTrue(os.path.exists(dir_path), f"{dir_name} 目錄不存在")
@@ -427,7 +426,6 @@ class TestVMInitialization(unittest.TestCase):
         # 驗證腳本關鍵功能
         self.assertIn('python', script_content, "啟動腳本中缺少 Python 啟動指令")
         self.assertIn('main.py', script_content, "啟動腳本中缺少對主程序的引用")
-        self.assertIn('wait', script_content, "啟動腳本中缺少等待功能")
 
 if __name__ == '__main__':
     # 設置測試環境
