@@ -2,7 +2,7 @@
 台股指令與背景通知。
 
 指令：
-- !twii：加權指數（cnyes 網頁）
+- !twii：加權指數與櫃買指數（證交所 MIS）
 - !tws <股票代碼>：個股即時資訊（twstock）
 - !早盤報告：立即在目前頻道產生早盤報告（預覽用）
 
@@ -28,7 +28,6 @@ from typing import Dict, List, Mapping, Optional, Set, Tuple
 
 import discord
 import twstock
-from bs4 import BeautifulSoup
 from discord.ext import commands, tasks
 
 from core import market
@@ -150,6 +149,18 @@ def _news_lines(items: List[market.NewsItem]) -> List[str]:
     return [f'• [{i.title.replace("[", "［").replace("]", "］")}]({i.url})' for i in items]
 
 
+def format_index(q: market.IndexQuote) -> str:
+    """!twii 的單一指數區塊。"""
+    lines = [
+        f'**{q.name}**　{q.date:%m/%d} {q.time}',
+        f'目前 {q.price:,.2f}　{_arrow(q.change)}{abs(q.change):,.2f}（{q.change_pct:+.2f}%）',
+    ]
+    if None not in (q.open, q.high, q.low):
+        lines.append(f'開盤 {q.open:,.2f}｜最高 {q.high:,.2f}｜最低 {q.low:,.2f}')
+    lines.append(f'昨收 {q.prev_close:,.2f}')
+    return '\n'.join(lines)
+
+
 def render_morning_report(report: MorningReport) -> discord.Embed:
     now = report.generated_at
     embed = discord.Embed(
@@ -163,9 +174,14 @@ def render_morning_report(report: MorningReport) -> discord.Embed:
     elif not report.indices:
         embed.add_field(name='台股收盤', value='無資料', inline=False)
     else:
-        day = report.indices[0].date
+        first = report.indices[0]
+        # 08:30 的報告拿到的是前一交易日收盤；盤中用 !早盤報告 時要標成盤中，避免誤會
+        if first.date == now.date() and first.time < '13:30:00':
+            name = f'台股盤中（{first.date:%m/%d} {first.time[:5]}）'
+        else:
+            name = f'台股收盤（{first.date:%m/%d}）'
         rows = [(q.name, q.price, q.change, q.change_pct) for q in report.indices]
-        embed.add_field(name=f'台股收盤（{day:%m/%d}）', value=_fit(_quote_lines(rows)), inline=False)
+        embed.add_field(name=name, value=_fit(_quote_lines(rows)), inline=False)
 
     if report.global_quotes is None:
         value = unavailable
@@ -338,43 +354,17 @@ class Stock(Cog_Extension):
 
     @commands.command()
     async def twii(self, ctx):
-        """獲取台灣加權指數資訊"""
-        url = 'https://invest.cnyes.com/index/TWS/TSE01'
-
+        """加權指數與櫃買指數（證交所即時資料）"""
         try:
-            async with self.session.get(url) as response:
-                if response.status != 200:
-                    await ctx.send(f"獲取數據失敗，狀態碼: {response.status}")
-                    return
-
-                response_text = await response.text()
-
-                soup = BeautifulSoup(response_text, 'html.parser')
-
-                twiiTitle = soup.select('.header_second')[0].text
-                twiiDateNow = soup.select('.header-time .jsx-2214436525')[0].text
-                twiiIndex = soup.select('.header-info .info-price .info-lp span')[0].text
-                twiiUpDownIndex = soup.select('.header-info .info-change .change-net span')[0].text
-                twiiUpDownPercent = soup.select('.header-info .info-change .change-percent span')[0].text
-
-                twiiBuySellTitle = soup.select('.data-block .block-title')[0].text
-                twiiBuySellValue = soup.select('.data-block .block-value')[0].text
-                twiiToDayHeighLowTitle = soup.select('.data-block .block-title')[1].text
-                twiiToDayHeighLowValue = soup.select('.data-block .block-value')[1].text
-                twii52HeighLowTitle = soup.select('.data-block .block-title')[2].text
-                twii52HeighLowValue = soup.select('.data-block .block-value')[2].text
-
-                await ctx.send(twiiTitle + '\n' + twiiDateNow + '\n' +
-                              '當前指數: ' + str(twiiIndex) + '\n' + '漲跌點: ' +
-                              str(twiiUpDownIndex) + '\n' + '漲跌百分比: ' +
-                              str(twiiUpDownPercent) + '\n' +
-                              twiiBuySellTitle + ': ' + twiiBuySellValue +
-                              '\n' + twiiToDayHeighLowTitle + ': ' +
-                              twiiToDayHeighLowValue + '\n' +
-                              twii52HeighLowTitle + ': ' +
-                              twii52HeighLowValue)
+            quotes = await market.fetch_indices(self.session)
         except Exception as e:
-            await ctx.send(f"獲取台股指數時發生錯誤: {str(e)}")
+            logger.warning('!twii 抓取指數失敗：%s', e)
+            await ctx.send('獲取台股指數失敗，請稍後再試')
+            return
+        if not quotes:
+            await ctx.send('目前沒有成交資料（可能尚未開盤）')
+            return
+        await ctx.send('\n\n'.join(format_index(q) for q in quotes))
 
     @commands.command()
     async def tws(self, ctx, stock_id: str = None):

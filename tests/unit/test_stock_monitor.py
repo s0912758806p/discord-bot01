@@ -176,6 +176,11 @@ class TestRenderMorningReport(unittest.TestCase):
         self.assertIn('台積電ADR　362.62　🔺2.93（+0.81%）', f['美股收盤'])
         self.assertEqual(f['國內財經新聞'].count('https://news.cnyes.com/news/id/'), 8)
 
+    def test_intraday_preview_is_labelled_intraday(self):
+        live = IndexQuote('發行量加權股價指數', 39000.0, 40000.0, None, None, None, TODAY, '10:05:00')
+        embed = self.render(generated_at=tpe(TODAY, 10, 6), indices=[live])
+        self.assertEqual(embed.fields[0].name, '台股盤中（11/19 10:05）')
+
     def test_fields_stay_within_discord_limit(self):
         embed = self.render(domestic_news=news(30, title_len=80), world_news=news(30, title_len=80))
         for field in embed.fields:
@@ -255,6 +260,32 @@ class TestMorningReportTask(unittest.IsolatedAsyncioTestCase):
     def test_report_loop_uses_configured_time(self):
         cog, _, _ = make_cog(report_time=dt.time(7, 45, tzinfo=TPE))
         self.assertEqual(cog.morning_report.time, [dt.time(7, 45, tzinfo=TPE)])
+
+
+class TestTwiiCommand(unittest.IsolatedAsyncioTestCase):
+    async def run_twii(self, **fetch_kwargs):
+        from cmds.stock import Stock
+        cog, _, _ = make_cog()
+        ctx = MagicMock(send=AsyncMock())
+        with patch('cmds.stock.market.fetch_indices', AsyncMock(**fetch_kwargs)):
+            await Stock.twii.callback(cog, ctx)
+        return ctx.send.await_args.args[0]
+
+    async def test_shows_taiex_and_otc(self):
+        taiex = IndexQuote('發行量加權股價指數', 38426.89, 40194.91, 40145.73, 40315.53, 38259.70,
+                           TODAY, '13:33:00')
+        otc = IndexQuote('櫃買指數', 285.33, 307.55, None, None, None, TODAY, '13:33:00')
+        text = await self.run_twii(return_value=[taiex, otc])
+        self.assertIn('**發行量加權股價指數**　11/19 13:33:00', text)
+        self.assertIn('目前 38,426.89　🔻1,768.02（-4.40%）', text)
+        self.assertIn('開盤 40,145.73｜最高 40,315.53｜最低 38,259.70', text)
+        self.assertIn('**櫃買指數**', text)
+
+    async def test_no_trades_yet(self):
+        self.assertIn('尚未開盤', await self.run_twii(return_value=[]))
+
+    async def test_fetch_error(self):
+        self.assertIn('失敗', await self.run_twii(side_effect=TimeoutError))
 
 
 class TestLifecycle(unittest.IsolatedAsyncioTestCase):
