@@ -35,6 +35,8 @@ GLOBAL_SYMBOLS: Tuple[str, ...] = (
 )
 CNYES_NEWS_URL = 'https://api.cnyes.com/media/api/v1/newslist/category/{category}'
 CNYES_NEWS_LINK = 'https://news.cnyes.com/news/id/{news_id}'
+# 系統自動產生的制式稿（指數漲跌、目標價調整、營收數字），約占台股/國際股新聞三成，報告裡略過
+NOISE_TITLE_PREFIXES = ('盤中速報', '鉅亨速報', '營收速報')
 
 HOLIDAY_URL = 'https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule'
 # 開休市日期表也列出「開始交易日」「最後交易日」這類照常交易的日子，不能當休市
@@ -122,11 +124,13 @@ def parse_cnyes_quotes(data: dict) -> List[GlobalQuote]:
 
 
 def parse_cnyes_news(data: dict) -> List[NewsItem]:
-    """鉅亨新聞列表。略過外包稿（isOutsource=1，例如第三方分析平台的轉載）。"""
+    """鉅亨新聞列表。略過外包稿（isOutsource=1，第三方平台轉載）與自動產生的制式速報。"""
     items = []
     for n in (data.get('items') or {}).get('data') or []:
         title, news_id, ts = n.get('title'), n.get('newsId'), n.get('publishAt')
         if not title or news_id is None or ts is None or n.get('isOutsource'):
+            continue
+        if title.lstrip().startswith(NOISE_TITLE_PREFIXES):
             continue
         items.append(NewsItem(
             title=title.strip(),
